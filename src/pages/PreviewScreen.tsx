@@ -22,6 +22,7 @@ export default function PreviewScreen() {
     const navigate = useAppStore((s) => s.navigate)
     const wizardData = useAppStore((s) => s.wizardData)
     const oauthToken = useAppStore((s) => s.oauthToken)
+    const projectId = useAppStore((s) => s.projectId)
     const selectedModel = useAppStore((s) => s.selectedModel)
 
     const [aiInput, setAiInput] = useState('')
@@ -90,6 +91,7 @@ export default function PreviewScreen() {
             // Invoke backend command with selected model
             await invoke('execute_model_prompt', {
                 token: oauthToken || '',
+                projectId: projectId || '',
                 model: modelId,
                 prompt: prompt,
             })
@@ -115,6 +117,7 @@ export default function PreviewScreen() {
     const handleKeyDown = (e: React.KeyboardEvent) => {
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault()
+            e.stopPropagation()
             handleSendPrompt()
         }
     }

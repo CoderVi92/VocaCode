@@ -9,11 +9,20 @@ export default function LoginScreen() {
     const handleLogin = async () => {
         navigate('loading')
         try {
-            const token: string = await invoke('login_oauth_proxy')
+            // login_oauth_proxy now returns JSON string: { access_token, refresh_token, project_id }
+            const loginResultJson: string = await invoke('login_oauth_proxy')
+            const loginResult = JSON.parse(loginResultJson) as {
+                access_token: string
+                refresh_token: string
+                project_id: string
+            }
+
             const models: AntigravityModel[] = await invoke('fetch_gemini_models')
 
             const store = useAppStore.getState()
-            store.setOauthToken(token)
+            store.setOauthToken(loginResult.access_token)
+            store.setRefreshToken(loginResult.refresh_token)
+            store.setProjectId(loginResult.project_id)
             store.setAiModels(models)
             if (models.length > 0) {
                 store.setSelectedModel(models[0])

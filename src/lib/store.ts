@@ -50,6 +50,8 @@ interface AppState {
     aiModels: AntigravityModel[]
     selectedModel: AntigravityModel | null
     oauthToken: string | null
+    projectId: string | null
+    refreshToken: string | null
 
     // Actions
     navigate: (page: AppPage) => void
@@ -64,6 +66,8 @@ interface AppState {
     setAiModels: (models: AntigravityModel[]) => void
     setSelectedModel: (model: AntigravityModel) => void
     setOauthToken: (token: string) => void
+    setProjectId: (id: string) => void
+    setRefreshToken: (token: string) => void
 }
 
 const defaultWizardData: WizardData = {
@@ -87,6 +91,8 @@ export const useAppStore = create<AppState>((set) => ({
     aiModels: [],
     selectedModel: null,
     oauthToken: null,
+    projectId: null,
+    refreshToken: null,
 
     navigate: (page) => set({ currentPage: page }),
     setMode: (mode) => set({ mode }),
@@ -109,4 +115,6 @@ export const useAppStore = create<AppState>((set) => ({
     setAiModels: (models) => set({ aiModels: models }),
     setSelectedModel: (model) => set({ selectedModel: model }),
     setOauthToken: (token) => set({ oauthToken: token }),
+    setProjectId: (id) => set({ projectId: id }),
+    setRefreshToken: (token) => set({ refreshToken: token }),
 }))
