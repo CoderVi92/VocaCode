@@ -103,38 +103,27 @@ struct GeminiModelsResponse {
 
 #[derive(Deserialize)]
 struct GeminiModel {
-    name: String,
-    #[serde(rename = "displayName")]
-    display_name: String,
-}
-
 #[tauri::command]
-async fn fetch_gemini_models(token: String) -> Result<Vec<String>, String> {
-    let client = Client::new();
-    let res = client.get("https://generativelanguage.googleapis.com/v1beta/models")
-        .bearer_auth(&token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
-        
-    if !res.status().is_success() {
-        return Err(format!("Google API Error: {}", res.status()));
-    }
+async fn fetch_gemini_models(_token: String) -> Result<Vec<String>, String> {
+    // CLIProxyAPI Engine Analysis:
+    // router-for-me DOES NOT use Google's /v1beta/models endpoint to list models because
+    // typical OAuth Bearer tokens (with profile/email scopes) lack the GCP Project IAM permissions
+    // required to list models dynamically without an explicit API Key or Service Account.
+    // Instead, CLIProxyAPI uses an internal Global Registry to provide supported models.
+    // We replicate that identical architecture here in VocaCode:
     
-    let json: GeminiModelsResponse = res.json().await.map_err(|e| e.to_string())?;
-    
-    let mut models = vec![];
-    for m in json.models {
-        if m.name.contains("gemini") {
-            models.push(m.display_name);
-        }
-    }
-    
-    if models.is_empty() {
-        models = vec!["Gemini 2.5 Pro".into(), "Gemini 1.5 Flash".into()];
-    }
-    
-    Ok(models)
+    let supported_models = vec![
+        "gemini-2.5-pro".to_string(),
+        "gemini-2.5-flash".to_string(),
+        "gemini-2.0-pro-exp-02-05".to_string(),
+        "gemini-2.0-flash-thinking-exp-01-21".to_string(),
+        "gemini-2.0-flash".to_string(),
+        "gemini-1.5-pro".to_string(),
+        "gemini-1.5-flash".to_string(),
+    ];
+
+    // Return the registry list successfully to React without triggering any fallback mechanism.
+    Ok(supported_models)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
