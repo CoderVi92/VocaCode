@@ -7,19 +7,29 @@ use futures_util::StreamExt;
 use eventsource_stream::Eventsource;
 use serde_json::Value;
 
-// ── OAuth Constants (matching CLIProxyAPI internal/auth/antigravity/constants.go) ──
+// ── OAuth Constants ──
 const CLIENT_ID: &str = "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com";
 const CLIENT_SECRET: &str = "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";
 const CALLBACK_PORT: u16 = 51121;
 const OAUTH_SCOPES: &str = "https://www.googleapis.com/auth/cloud-platform https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile https://www.googleapis.com/auth/cclog https://www.googleapis.com/auth/experimentsandconfigs";
 
-// ── API Constants ──
-const API_ENDPOINT: &str = "https://cloudcode-pa.googleapis.com";
-const API_DAILY_ENDPOINT: &str = "https://daily-cloudcode-pa.googleapis.com";
+// ── API Endpoints (matching opencode-ag-auth/constants.ts) ──
+const ENDPOINT_DAILY: &str = "https://daily-cloudcode-pa.sandbox.googleapis.com";
+const ENDPOINT_AUTOPUSH: &str = "https://autopush-cloudcode-pa.sandbox.googleapis.com";
+const ENDPOINT_PROD: &str = "https://cloudcode-pa.googleapis.com";
 const API_VERSION: &str = "v1internal";
-const API_USER_AGENT: &str = "google-api-nodejs-client/9.15.1";
-const API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
-const STREAM_USER_AGENT: &str = "antigravity/1.19.6 darwin/arm64";
+
+// ── Default fallback project (from opencode-ag-auth) ──
+const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
+
+// ── Headers ──
+const HEADER_UA_GEMINI_CLI: &str = "google-api-nodejs-client/9.15.1";
+const HEADER_UA_ANTIGRAVITY: &str = "antigravity/1.18.3 windows/amd64";
+const HEADER_X_GOOG_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
+
+fn client_metadata() -> String {
+    r#"{"ideType":"ANTIGRAVITY","platform":"WINDOWS","pluginType":"GEMINI"}"#.to_string()
+}
 
 // ── Login Response ──
 #[derive(Serialize)]
@@ -126,9 +136,9 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
 
     let token_data: TokenResponse = res.json().await.map_err(|e| e.to_string())?;
 
-    // ── Step 2: Fetch project_id via loadCodeAssist ──
+    // ── Step 2: Fetch project_id via loadCodeAssist (prod first, then fallback) ──
     let project_id = fetch_project_id_internal(&client, &token_data.access_token).await
-        .unwrap_or_default();
+        .unwrap_or_else(|_| DEFAULT_PROJECT_ID.to_string());
 
     // ── Return JSON with all auth data ──
     let result = LoginResult {
@@ -140,129 +150,190 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
     serde_json::to_string(&result).map_err(|e| e.to_string())
 }
 
-/// Fetch the user's cloudaicompanionProject via loadCodeAssist endpoint
-/// (matching CLIProxyAPI internal/auth/antigravity/auth.go:FetchProjectID)
+/// Fetch the user's cloudaicompanionProject via loadCodeAssist endpoint.
+/// Tries prod first, then daily, then autopush (matching opencode-ag-auth ANTIGRAVITY_LOAD_ENDPOINTS).
+/// Falls back to onboardUser if no project found.
 async fn fetch_project_id_internal(client: &Client, access_token: &str) -> Result<String, String> {
-    let load_url = format!("{}/{}:loadCodeAssist", API_ENDPOINT, API_VERSION);
+    // Try loadCodeAssist across all endpoints (prod first)
+    let load_endpoints = [ENDPOINT_PROD, ENDPOINT_DAILY, ENDPOINT_AUTOPUSH];
 
     let body = serde_json::json!({
         "metadata": {
             "ideType": "ANTIGRAVITY",
-            "platform": "PLATFORM_UNSPECIFIED",
+            "platform": "WINDOWS",
             "pluginType": "GEMINI"
         }
     });
 
-    let res = client.post(&load_url)
-        .bearer_auth(access_token)
-        .header("Content-Type", "application/json")
-        .header("User-Agent", API_USER_AGENT)
-        .header("X-Goog-Api-Client", API_CLIENT)
-        .header("Client-Metadata", r#"{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#)
-        .json(&body)
-        .send()
-        .await
-        .map_err(|e| format!("loadCodeAssist request failed: {}", e))?;
+    let mut last_response_json: Option<Value> = None;
 
-    if !res.status().is_success() {
-        let err_text = res.text().await.unwrap_or_default();
-        return Err(format!("loadCodeAssist error: {}", err_text));
-    }
+    for endpoint in &load_endpoints {
+        let load_url = format!("{}/{}:loadCodeAssist", endpoint, API_VERSION);
 
-    let json: Value = res.json().await.map_err(|e| format!("loadCodeAssist parse error: {}", e))?;
+        let res = match client.post(&load_url)
+            .bearer_auth(access_token)
+            .header("Content-Type", "application/json")
+            .header("User-Agent", HEADER_UA_GEMINI_CLI)
+            .header("X-Goog-Api-Client", HEADER_X_GOOG_API_CLIENT)
+            .header("Client-Metadata", client_metadata())
+            .json(&body)
+            .send()
+            .await {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
 
-    // Extract cloudaicompanionProject — can be string or object with "id"
-    if let Some(project) = json.get("cloudaicompanionProject") {
-        if let Some(s) = project.as_str() {
-            if !s.trim().is_empty() {
-                return Ok(s.trim().to_string());
+        if !res.status().is_success() {
+            continue;
+        }
+
+        let json: Value = match res.json().await {
+            Ok(j) => j,
+            Err(_) => continue,
+        };
+
+        // Extract cloudaicompanionProject — can be string or object with "id"
+        if let Some(project) = json.get("cloudaicompanionProject") {
+            if let Some(s) = project.as_str() {
+                if !s.trim().is_empty() {
+                    return Ok(s.trim().to_string());
+                }
+            }
+            if let Some(id) = project.get("id").and_then(|v| v.as_str()) {
+                if !id.trim().is_empty() {
+                    return Ok(id.trim().to_string());
+                }
             }
         }
-        if let Some(id) = project.get("id").and_then(|v| v.as_str()) {
-            if !id.trim().is_empty() {
-                return Ok(id.trim().to_string());
-            }
-        }
+
+        last_response_json = Some(json);
+        break; // got a successful response but no project — proceed to onboard
     }
 
     // No project found — user needs onboarding
-    // Extract default tier ID from allowedTiers (matching CLIProxyAPI auth.go:FetchProjectID)
-    let mut tier_id = "legacy-tier".to_string();
-    if let Some(tiers) = json.get("allowedTiers").and_then(|t| t.as_array()) {
-        for tier in tiers {
-            if tier.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) {
-                if let Some(id) = tier.get("id").and_then(|v| v.as_str()) {
-                    if !id.trim().is_empty() {
-                        tier_id = id.trim().to_string();
-                        break;
+    // Extract default tier ID from allowedTiers (matching opencode-ag-auth project.ts:getDefaultTierId)
+    let mut tier_id = "FREE".to_string();
+    if let Some(ref json) = last_response_json {
+        if let Some(tiers) = json.get("allowedTiers").and_then(|t| t.as_array()) {
+            // First try to find default tier
+            for tier in tiers {
+                if tier.get("isDefault").and_then(|v| v.as_bool()).unwrap_or(false) {
+                    if let Some(id) = tier.get("id").and_then(|v| v.as_str()) {
+                        if !id.trim().is_empty() {
+                            tier_id = id.trim().to_string();
+                            break;
+                        }
+                    }
+                }
+            }
+            // Fallback: use first tier if no default found
+            if tier_id == "FREE" {
+                if let Some(first) = tiers.first() {
+                    if let Some(id) = first.get("id").and_then(|v| v.as_str()) {
+                        if !id.trim().is_empty() {
+                            tier_id = id.trim().to_string();
+                        }
                     }
                 }
             }
         }
     }
 
-    // Call onboardUser with the extracted tier ID, polling until done
-    let onboard_url = format!("{}/{}:onboardUser", API_ENDPOINT, API_VERSION);
+    // Call onboardUser — try across fallback endpoints (matching opencode-ag-auth project.ts:onboardManagedProject)
     let onboard_body = serde_json::json!({
         "tierId": tier_id,
         "metadata": {
             "ideType": "ANTIGRAVITY",
-            "platform": "PLATFORM_UNSPECIFIED",
+            "platform": "WINDOWS",
             "pluginType": "GEMINI"
         }
     });
 
-    for _attempt in 0..5 {
-        let res = client.post(&onboard_url)
-            .bearer_auth(access_token)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", API_USER_AGENT)
-            .header("X-Goog-Api-Client", API_CLIENT)
-            .header("Client-Metadata", r#"{"ideType":"ANTIGRAVITY","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#)
-            .json(&onboard_body)
-            .send()
-            .await
-            .map_err(|e| format!("onboardUser request failed: {}", e))?;
+    let fallback_endpoints = [ENDPOINT_DAILY, ENDPOINT_AUTOPUSH, ENDPOINT_PROD];
 
-        if res.status().is_success() {
-            let json: Value = res.json().await.map_err(|e| format!("onboardUser parse error: {}", e))?;
+    for endpoint in &fallback_endpoints {
+        let onboard_url = format!("{}/{}:onboardUser", endpoint, API_VERSION);
+
+        for _attempt in 0..10 {
+            let res = match client.post(&onboard_url)
+                .bearer_auth(access_token)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", HEADER_UA_ANTIGRAVITY)
+                .header("X-Goog-Api-Client", HEADER_X_GOOG_API_CLIENT)
+                .header("Client-Metadata", client_metadata())
+                .json(&onboard_body)
+                .send()
+                .await {
+                    Ok(r) => r,
+                    Err(_) => break,
+                };
+
+            if !res.status().is_success() {
+                break;
+            }
+
+            let json: Value = match res.json().await {
+                Ok(j) => j,
+                Err(_) => break,
+            };
 
             if json.get("done").and_then(|v| v.as_bool()).unwrap_or(false) {
-                if let Some(response) = json.get("response") {
-                    if let Some(project) = response.get("cloudaicompanionProject") {
-                        if let Some(s) = project.as_str() {
-                            if !s.trim().is_empty() {
-                                return Ok(s.trim().to_string());
-                            }
-                        }
-                        if let Some(id) = project.get("id").and_then(|v| v.as_str()) {
-                            if !id.trim().is_empty() {
-                                return Ok(id.trim().to_string());
-                            }
-                        }
+                if let Some(managed_id) = json.pointer("/response/cloudaicompanionProject/id")
+                    .and_then(|v| v.as_str()) {
+                    if !managed_id.trim().is_empty() {
+                        return Ok(managed_id.trim().to_string());
                     }
                 }
+                // done but no project in response — use default
+                return Ok(DEFAULT_PROJECT_ID.to_string());
             }
-            // Not done yet, wait 2s and retry (using std sleep in blocking to avoid tokio dep)
-            let sleep_future = async {
-                let (tx, rx) = std::sync::mpsc::channel();
-                std::thread::spawn(move || {
-                    std::thread::sleep(std::time::Duration::from_secs(2));
-                    let _ = tx.send(());
-                });
-                let _ = tauri::async_runtime::spawn_blocking(move || { let _ = rx.recv(); }).await;
-            };
-            sleep_future.await;
-        } else {
-            let err_text = res.text().await.unwrap_or_default();
-            return Err(format!("onboardUser error: {}", err_text));
+
+            // Not done yet — wait 5s and retry (matching opencode-ag-auth: delayMs=5000)
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(5));
+                let _ = tx.send(());
+            });
+            let _ = tauri::async_runtime::spawn_blocking(move || { let _ = rx.recv(); }).await;
         }
     }
 
-    Err("Could not fetch project_id after 5 attempts".into())
+    // All attempts failed — return default project ID as final fallback
+    Ok(DEFAULT_PROJECT_ID.to_string())
 }
 
 
+// ── Token Refresh ──
+#[tauri::command]
+async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
+    let client = Client::new();
+
+    let res = client.post("https://oauth2.googleapis.com/token")
+        .form(&[
+            ("grant_type", "refresh_token"),
+            ("refresh_token", &refresh_token),
+            ("client_id", CLIENT_ID),
+            ("client_secret", CLIENT_SECRET),
+        ])
+        .send()
+        .await
+        .map_err(|e| format!("Refresh request failed: {}", e))?;
+
+    if !res.status().is_success() {
+        let err_text = res.text().await.unwrap_or_default();
+        return Err(format!("Token refresh error: {}", err_text));
+    }
+
+    let json: Value = res.json().await.map_err(|e| format!("Parse error: {}", e))?;
+    let new_token = json.get("access_token")
+        .and_then(|v| v.as_str())
+        .ok_or("No access_token in refresh response")?;
+
+    Ok(new_token.to_string())
+}
+
+
+// ── Model List ──
 #[derive(serde::Serialize)]
 struct AntigravityModel {
     id: String,
@@ -279,57 +350,49 @@ struct AntigravityModel {
 
 #[tauri::command]
 async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
+    // Model IDs match verified working models from opencode-ag-auth model-resolver.ts
     let models = vec![
         AntigravityModel {
-            id: "antigravity-gemini-3.1-pro".into(),
-            name: "antigravity-gemini-3.1-pro".into(),
-            display_name: "Gemini 3.1 Pro".into(),
-            description: "Gemini 3.1 Pro via Antigravity quota. Variants: -low, -high".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_535,
-            source: "antigravity".into(),
-        },
-        AntigravityModel {
-            id: "antigravity-gemini-3.1-pro-high".into(),
-            name: "antigravity-gemini-3.1-pro-high".into(),
+            id: "gemini-3.1-pro-high".into(),
+            name: "gemini-3.1-pro-high".into(),
             display_name: "Gemini 3.1 Pro (High)".into(),
-            description: "Gemini 3.1 Pro with high thinking via Antigravity quota".into(),
+            description: "Gemini 3.1 Pro with high thinking budget".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
             source: "antigravity".into(),
         },
         AntigravityModel {
-            id: "antigravity-gemini-3.1-pro-low".into(),
-            name: "antigravity-gemini-3.1-pro-low".into(),
+            id: "gemini-3.1-pro-low".into(),
+            name: "gemini-3.1-pro-low".into(),
             display_name: "Gemini 3.1 Pro (Low)".into(),
-            description: "Gemini 3.1 Pro with low thinking via Antigravity quota".into(),
+            description: "Gemini 3.1 Pro with low thinking budget".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
             source: "antigravity".into(),
         },
         AntigravityModel {
-            id: "antigravity-gemini-3-flash".into(),
-            name: "antigravity-gemini-3-flash".into(),
+            id: "gemini-3-flash".into(),
+            name: "gemini-3-flash".into(),
             display_name: "Gemini 3 Flash".into(),
-            description: "Gemini 3 Flash via Antigravity quota. Variants: -minimal, -low, -medium, -high".into(),
+            description: "Gemini 3 Flash — fast and lightweight".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_536,
             source: "antigravity".into(),
         },
-         AntigravityModel {
-            id: "antigravity-claude-sonnet-4-6".into(),
-            name: "antigravity-claude-sonnet-4-6".into(),
+        AntigravityModel {
+            id: "claude-sonnet-4-6".into(),
+            name: "claude-sonnet-4-6".into(),
             display_name: "Claude Sonnet 4.6".into(),
-            description: "Claude Sonnet 4.6 via Antigravity quota".into(),
+            description: "Claude Sonnet 4.6 via Antigravity".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
         },
         AntigravityModel {
-            id: "antigravity-claude-opus-4-6-thinking".into(),
-            name: "antigravity-claude-opus-4-6-thinking".into(),
+            id: "claude-opus-4-6-thinking".into(),
+            name: "claude-opus-4-6-thinking".into(),
             display_name: "Claude Opus 4.6 (Thinking)".into(),
-            description: "Claude Opus 4.6 with extended thinking via Antigravity quota.".into(),
+            description: "Claude Opus 4.6 with extended thinking".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
@@ -349,26 +412,49 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
 }
 
 
+// ── Execute Model Prompt with Endpoint Fallback ──
 #[tauri::command]
 async fn execute_model_prompt(app: AppHandle, token: String, project_id: String, model: String, prompt: String) -> Result<(), String> {
-    let mut thinking_level = "low";
-    let base_model = if model.ends_with("-high") {
-        thinking_level = "high";
-        model.trim_end_matches("-high").to_string()
-    } else if model.ends_with("-low") {
-        thinking_level = "low";
-        model.trim_end_matches("-low").to_string()
-    } else if model.ends_with("-minimal") {
-        thinking_level = "minimal";
-        model.trim_end_matches("-minimal").to_string()
-    } else if model.ends_with("-medium") {
-        thinking_level = "medium";
-        model.trim_end_matches("-medium").to_string()
+    // Use project_id or fallback to default
+    let effective_project = if project_id.trim().is_empty() {
+        DEFAULT_PROJECT_ID.to_string()
     } else {
-        model.clone()
+        project_id
     };
 
-    // Generate stable sessionId from prompt hash (matching CLIProxyAPI)
+    // Build thinking config based on model family
+    // Gemini 3.x uses thinkingLevel (string), Claude/Gemini 2.5 uses thinkingBudget (numeric)
+    let thinking_config = if model.contains("claude") {
+        // Claude models: use thinkingBudget (numeric)
+        serde_json::json!({
+            "thinkingBudget": 16384,
+            "includeThoughts": true
+        })
+    } else if model.starts_with("gemini-2.5") {
+        // Gemini 2.5: use thinkingBudget (numeric)
+        serde_json::json!({
+            "thinkingBudget": 8192,
+            "includeThoughts": true
+        })
+    } else {
+        // Gemini 3.x: thinkingLevel is embedded in model name (e.g. gemini-3.1-pro-high)
+        // No separate thinkingConfig needed — the API infers from model suffix
+        serde_json::json!({})
+    };
+
+    // Build generation config
+    let generation_config = if thinking_config.as_object().map_or(true, |o| o.is_empty()) {
+        serde_json::json!({
+            "maxOutputTokens": 65535
+        })
+    } else {
+        serde_json::json!({
+            "maxOutputTokens": 65535,
+            "thinkingConfig": thinking_config
+        })
+    };
+
+    // Generate stable sessionId
     let session_id = format!("-{}", {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -377,15 +463,11 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
     });
 
     let payload = serde_json::json!({
-        "project": project_id,
-        "model": base_model,
+        "project": effective_project,
+        "model": model,
         "request": {
             "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
-            "generationConfig": {
-                "thinkingConfig": {
-                    "thinkingLevel": thinking_level
-                }
-            },
+            "generationConfig": generation_config,
             "sessionId": session_id
         },
         "requestType": "agent",
@@ -393,32 +475,55 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
         "requestId": format!("agent-{}", uuid::Uuid::new_v4())
     });
 
+    // Try endpoints in fallback order: daily → prod (matching opencode-ag-auth ENDPOINT_FALLBACKS)
+    let stream_endpoints = [ENDPOINT_DAILY, ENDPOINT_PROD];
     let client = reqwest::Client::new();
-    let res = client.post(format!("{}/{}:streamGenerateContent?alt=sse", API_DAILY_ENDPOINT, API_VERSION))
-        .bearer_auth(&token)
-        .header("User-Agent", STREAM_USER_AGENT)
-        .header("Content-Type", "application/json")
-        .json(&payload)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?;
 
-    if !res.status().is_success() {
-        let err_text = res.text().await.unwrap_or_default();
-        return Err(format!("Google API Error: {}", err_text));
-    }
+    let mut last_err = String::from("All endpoints failed");
 
-    let mut stream = res.bytes_stream().eventsource();
-    
-    while let Some(event) = stream.next().await {
-        match event {
-            Ok(event) => {
-                let text = event.data;
-                if let Ok(json) = serde_json::from_str::<Value>(&text) {
-                    if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()) {
-                        if let Some(first) = candidates.get(0) {
-                            if let Some(content) = first.get("content") {
-                                if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+    for endpoint in &stream_endpoints {
+        let url = format!("{}/{}:streamGenerateContent?alt=sse", endpoint, API_VERSION);
+
+        let res = match client.post(&url)
+            .bearer_auth(&token)
+            .header("User-Agent", HEADER_UA_ANTIGRAVITY)
+            .header("Content-Type", "application/json")
+            .header("X-Goog-Api-Client", HEADER_X_GOOG_API_CLIENT)
+            .header("Client-Metadata", client_metadata())
+            .json(&payload)
+            .send()
+            .await {
+                Ok(r) => r,
+                Err(e) => {
+                    last_err = format!("Request to {} failed: {}", endpoint, e);
+                    continue;
+                }
+            };
+
+        if !res.status().is_success() {
+            let status = res.status().as_u16();
+            let err_text = res.text().await.unwrap_or_default();
+            last_err = format!("API Error ({}): {}", status, err_text);
+            // 404 means wrong endpoint, try next
+            if status == 404 {
+                continue;
+            }
+            // Other errors (401, 403, 429, 500) — stop trying
+            let _ = app.emit("ai_error", &last_err);
+            return Err(last_err);
+        }
+
+        // Success — stream the response
+        let mut stream = res.bytes_stream().eventsource();
+        
+        while let Some(event) = stream.next().await {
+            match event {
+                Ok(event) => {
+                    let text = event.data;
+                    if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                        if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()) {
+                            if let Some(first) = candidates.first() {
+                                if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
                                     for part in parts {
                                         if let Some(text_chunk) = part.get("text").and_then(|t| t.as_str()) {
                                             let _ = app.emit("ai_chunk", text_chunk);
@@ -429,23 +534,32 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
                         }
                     }
                 }
-            }
-            Err(e) => {
-                let _ = app.emit("ai_error", e.to_string());
-                break;
+                Err(e) => {
+                    let _ = app.emit("ai_error", e.to_string());
+                    break;
+                }
             }
         }
+        
+        let _ = app.emit("ai_complete", ());
+        return Ok(());
     }
-    
-    let _ = app.emit("ai_complete", ());
-    Ok(())
+
+    // All endpoints failed
+    let _ = app.emit("ai_error", &last_err);
+    Err(last_err)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![login_oauth_proxy, fetch_gemini_models, execute_model_prompt])
+        .invoke_handler(tauri::generate_handler![
+            login_oauth_proxy,
+            fetch_gemini_models,
+            execute_model_prompt,
+            refresh_access_token
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
