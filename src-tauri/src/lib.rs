@@ -12,33 +12,47 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
     app.opener().open_url(auth_url, None::<&str>).map_err(|e| e.to_string())?;
 
     let auth_code = tauri::async_runtime::spawn_blocking(move || {
-        for request in server.incoming_requests() {
-            let url = request.url();
-            if url.starts_with("/oauth2callback") {
-                let mut code_val = String::new();
-                if let Some(query) = url.split('?').nth(1) {
-                    for param in query.split('&') {
-                        if param.starts_with("code=") {
-                            code_val = param.trim_start_matches("code=").to_string();
+        let start = std::time::Instant::now();
+        loop {
+            if start.elapsed().as_secs() > 120 {
+                return Err("Timeout login OAuth: Pengguna tidak menyelesaikan login dalam 2 menit.".to_string());
+            }
+            if let Ok(Some(request)) = server.try_recv() {
+                let url = request.url();
+                if url.starts_with("/oauth2callback") {
+                    let mut code_val = String::new();
+                    if let Some(query) = url.split('?').nth(1) {
+                        for param in query.split('&') {
+                            if param.starts_with("code=") {
+                                let raw_code = param.trim_start_matches("code=");
+                                // Basic URL decoding for characters commonly present in Google Codes
+                                code_val = raw_code.replace("%2F", "/").replace("%2f", "/")
+                                                   .replace("%3D", "=").replace("%3d", "=")
+                                                   .replace("%2B", "+").replace("%2b", "+");
+                            }
                         }
                     }
-                }
-                
-                let html = r#"
-                <!DOCTYPE html><html><body style="background:#0b0d11;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;">
-                <div style="text-align:center;"><h2>Login Berhasil</h2><p>Silakan tutup tab ini dan kembali ke aplikasi VocaCode Anda.</p>
-                <script>
-                     setTimeout(() => window.close(), 2000);
-                </script></div></body></html>"#;
+                    
+                    let html = r#"
+                    <!DOCTYPE html><html><body style="background:#0b0d11;color:#fff;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;">
+                    <div style="text-align:center;"><h2>Login Berhasil</h2><p>Silakan tutup tab ini dan kembali ke aplikasi VocaCode Anda.</p>
+                    <script>
+                         setTimeout(() => window.close(), 2000);
+                    </script></div></body></html>"#;
 
-                let mut response = Response::from_string(html);
-                response.add_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap());
-                let _ = request.respond(response);
-                
-                return Ok(code_val);
+                    let mut response = Response::from_string(html);
+                    response.add_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap());
+                    let _ = request.respond(response);
+                    
+                    return Ok(code_val);
+                } else {
+                    let response = Response::from_string("Not Found").with_status_code(404);
+                    let _ = request.respond(response);
+                }
+            } else {
+                std::thread::sleep(std::time::Duration::from_millis(500));
             }
         }
-        Err("Server shut down".to_string())
     }).await.map_err(|e| e.to_string())??;
 
     if auth_code.is_empty() {
