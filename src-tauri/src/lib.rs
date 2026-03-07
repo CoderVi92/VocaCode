@@ -515,22 +515,57 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
 
         // Success — stream the response
         let mut stream = res.bytes_stream().eventsource();
+        let mut got_any_text = false;
         
         while let Some(event) = stream.next().await {
             match event {
                 Ok(event) => {
-                    let text = event.data;
-                    if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                    let data = event.data.clone();
+                    
+                    // Skip empty data or SSE keep-alive
+                    if data.is_empty() || data == "[DONE]" {
+                        continue;
+                    }
+
+                    if let Ok(json) = serde_json::from_str::<Value>(&data) {
+                        // Check for API-level error in response
+                        if let Some(err) = json.get("error") {
+                            let err_msg = err.get("message")
+                                .and_then(|m| m.as_str())
+                                .unwrap_or("Unknown API error");
+                            let _ = app.emit("ai_error", err_msg);
+                            break;
+                        }
+
                         if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()) {
                             if let Some(first) = candidates.first() {
                                 if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
                                     for part in parts {
+                                        // Skip thinking/thought blocks — only emit actual response text
+                                        let is_thought = part.get("thought")
+                                            .and_then(|t| t.as_bool())
+                                            .unwrap_or(false);
+                                        
                                         if let Some(text_chunk) = part.get("text").and_then(|t| t.as_str()) {
-                                            let _ = app.emit("ai_chunk", text_chunk);
+                                            if !text_chunk.is_empty() {
+                                                if is_thought {
+                                                    // Emit thinking content with prefix so UI can distinguish
+                                                    let _ = app.emit("ai_chunk", format!("[thinking] {}", text_chunk));
+                                                } else {
+                                                    let _ = app.emit("ai_chunk", text_chunk);
+                                                }
+                                                got_any_text = true;
+                                            }
                                         }
                                     }
                                 }
                             }
+                        }
+                    } else {
+                        // Not valid JSON — emit as raw text (some APIs return plain text chunks)
+                        if !data.trim().is_empty() {
+                            let _ = app.emit("ai_chunk", data.as_str());
+                            got_any_text = true;
                         }
                     }
                 }
@@ -541,6 +576,9 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
             }
         }
         
+        if !got_any_text {
+            let _ = app.emit("ai_chunk", "[No text content in response — model may have returned only thinking blocks or empty response]");
+        }
         let _ = app.emit("ai_complete", ());
         return Ok(());
     }
