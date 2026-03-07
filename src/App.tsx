@@ -1,4 +1,4 @@
-import { useRef, useEffect } from 'react'
+import { useRef, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
   ChevronDown, LayoutGrid, Search, Monitor,
@@ -12,6 +12,14 @@ import ExplorerScreen from './pages/ExplorerScreen'
 import WizardScreen from './pages/WizardScreen'
 import PreviewScreen from './pages/PreviewScreen'
 
+// Tauri window API — will fail gracefully in browser
+let appWindow: any = null
+try {
+  import('@tauri-apps/api/window').then((mod) => {
+    appWindow = mod.getCurrentWindow()
+  })
+} catch (_) { /* browser fallback */ }
+
 const HEADER_PAGES = ['explorer', 'wizard1', 'wizard2', 'wizard3', 'final_preview']
 const FOOTER_PAGES = ['explorer', 'wizard1', 'wizard2', 'wizard3', 'final_preview']
 
@@ -23,17 +31,38 @@ export default function App() {
   const setProfileOpen = useAppStore((s) => s.setProfileOpen)
   const navigate = useAppStore((s) => s.navigate)
   const selectedModel = useAppStore((s) => s.selectedModel)
+  const aiModels = useAppStore((s) => s.aiModels)
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel)
   const profileRef = useRef<HTMLDivElement>(null)
 
+  // Model selector dropdown state
+  const [isModelSelectorOpen, setModelSelectorOpen] = useState(false)
+  const modelSelectorRef = useRef<HTMLDivElement>(null)
+
+  // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (profileRef.current && !profileRef.current.contains(e.target as Node)) {
         setProfileOpen(false)
       }
+      if (modelSelectorRef.current && !modelSelectorRef.current.contains(e.target as Node)) {
+        setModelSelectorOpen(false)
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [setProfileOpen])
+
+  // Window control handlers
+  const handleMinimize = async () => {
+    try { await appWindow?.minimize() } catch (_) { /* browser */ }
+  }
+  const handleToggleMaximize = async () => {
+    try { await appWindow?.toggleMaximize() } catch (_) { /* browser */ }
+  }
+  const handleClose = async () => {
+    try { await appWindow?.close() } catch (_) { /* browser */ }
+  }
 
   const showHeader = HEADER_PAGES.includes(currentPage)
   const showFooter = FOOTER_PAGES.includes(currentPage)
@@ -43,13 +72,22 @@ export default function App() {
 
       {/* Window Controls — top-right, Windows style */}
       <div className="absolute top-0 right-0 p-2 flex items-center gap-0.5 z-[100]" data-tauri-drag-region>
-        <div className="p-1.5 hover:bg-white/5 rounded text-gray-600 hover:text-gray-300 cursor-pointer transition-colors">
+        <div
+          onClick={handleMinimize}
+          className="p-1.5 hover:bg-white/5 rounded text-gray-600 hover:text-gray-300 cursor-pointer transition-colors"
+        >
           <Minus size={14} />
         </div>
-        <div className="p-1.5 hover:bg-white/5 rounded text-gray-600 hover:text-gray-300 cursor-pointer transition-colors">
+        <div
+          onClick={handleToggleMaximize}
+          className="p-1.5 hover:bg-white/5 rounded text-gray-600 hover:text-gray-300 cursor-pointer transition-colors"
+        >
           <Square size={10} />
         </div>
-        <div className="p-1.5 hover:bg-red-600 rounded text-gray-600 hover:text-white cursor-pointer transition-colors">
+        <div
+          onClick={handleClose}
+          className="p-1.5 hover:bg-red-600 rounded text-gray-600 hover:text-white cursor-pointer transition-colors"
+        >
           <X size={14} />
         </div>
       </div>
@@ -71,19 +109,61 @@ export default function App() {
                 <span className="font-bold text-[10px] text-white uppercase tracking-tighter leading-none">VC</span>
               </div>
 
-              {/* Model Selectors (Always visible in BASIC/ADVANCE) */}
-              <div className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors">
-                <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
-                  <span className="group-hover:text-gray-200 transition-colors">Perencanaan</span>
-                  <ChevronDown size={11} className="text-gray-500" />
+              {/* Model Selector (functional dropdown) */}
+              <div className="relative" ref={modelSelectorRef}>
+                <div
+                  onClick={() => setModelSelectorOpen(!isModelSelectorOpen)}
+                  className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors"
+                >
+                  <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
+                    <span className="group-hover:text-gray-200 transition-colors">Perencanaan</span>
+                    <ChevronDown size={11} className="text-gray-500" />
+                  </div>
+                  <div className="h-3 w-px bg-white/10 mx-3" />
+                  <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
+                    <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
+                      {selectedModel?.displayName || 'Loading AI...'}
+                    </span>
+                    <ChevronDown size={11} className={`text-gray-500 transition-transform duration-200 ${isModelSelectorOpen ? 'rotate-180' : ''}`} />
+                  </div>
                 </div>
-                <div className="h-3 w-px bg-white/10 mx-3" />
-                <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
-                  <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
-                    {selectedModel?.displayName || 'Loading AI...'}
-                  </span>
-                  <ChevronDown size={11} className="text-gray-500" />
-                </div>
+
+                {/* Model Dropdown */}
+                <AnimatePresence>
+                  {isModelSelectorOpen && aiModels.length > 0 && (
+                    <motion.div
+                      initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                      animate={{ opacity: 1, y: 0, scale: 1 }}
+                      exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                      transition={{ duration: 0.15, ease: 'easeOut' }}
+                      className="absolute top-10 left-0 w-80 bg-[#161920] border border-white/10 rounded-xl shadow-2xl py-2 z-[100]"
+                    >
+                      <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Pilih Model AI</p>
+                      {aiModels.map((model) => (
+                        <button
+                          key={model.id}
+                          onClick={() => {
+                            setSelectedModel(model)
+                            setModelSelectorOpen(false)
+                          }}
+                          className={`w-full flex items-center justify-between px-4 py-2.5 hover:bg-white/5 transition-colors text-left ${
+                            selectedModel?.id === model.id ? 'bg-indigo-600/10' : ''
+                          }`}
+                        >
+                          <div className="flex flex-col">
+                            <span className={`text-[11px] font-bold ${selectedModel?.id === model.id ? 'text-indigo-300' : 'text-gray-300'}`}>
+                              {model.displayName}
+                            </span>
+                            <span className="text-[9px] text-gray-600 mt-0.5">{model.description}</span>
+                          </div>
+                          {selectedModel?.id === model.id && (
+                            <CheckCircle2 size={14} className="text-indigo-400 shrink-0 ml-2" />
+                          )}
+                        </button>
+                      ))}
+                    </motion.div>
+                  )}
+                </AnimatePresence>
               </div>
             </div>
 
