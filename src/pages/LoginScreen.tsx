@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion'
 import { invoke } from '@tauri-apps/api/core'
-import { useAppStore } from '../lib/store'
+import { useAppStore, AntigravityModel } from '../lib/store'
 import ScreenWrapper from '../components/ScreenWrapper'
 
 export default function LoginScreen() {
@@ -10,9 +10,10 @@ export default function LoginScreen() {
         navigate('loading')
         try {
             const token: string = await invoke('login_oauth_proxy')
-            const models: string[] = await invoke('fetch_gemini_models', { token: token })
+            const models: AntigravityModel[] = await invoke('fetch_gemini_models')
 
             const store = useAppStore.getState()
+            store.setOauthToken(token)
             store.setAiModels(models)
             if (models.length > 0) {
                 store.setSelectedModel(models[0])

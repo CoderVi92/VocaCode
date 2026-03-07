@@ -28,6 +28,16 @@ export interface WizardData {
     outputType: 'static' | 'dynamic'
 }
 
+export interface AntigravityModel {
+    id: string
+    name: string
+    displayName: string
+    description: string
+    inputTokenLimit: number
+    outputTokenLimit: number
+    source: string
+}
+
 interface AppState {
     currentPage: AppPage
     mode: AppMode
@@ -37,8 +47,9 @@ interface AppState {
     filter: string
     templatePage: number
     wizardData: WizardData
-    aiModels: string[]
-    selectedModel: string | null
+    aiModels: AntigravityModel[]
+    selectedModel: AntigravityModel | null
+    oauthToken: string | null
 
     // Actions
     navigate: (page: AppPage) => void
@@ -50,8 +61,9 @@ interface AppState {
     setTemplatePage: (page: number) => void
     updateWizardData: (data: Partial<WizardData>) => void
     toggleWizardPage: (page: string) => void
-    setAiModels: (models: string[]) => void
-    setSelectedModel: (model: string) => void
+    setAiModels: (models: AntigravityModel[]) => void
+    setSelectedModel: (model: AntigravityModel) => void
+    setOauthToken: (token: string) => void
 }
 
 const defaultWizardData: WizardData = {
@@ -72,8 +84,9 @@ export const useAppStore = create<AppState>((set) => ({
     filter: 'Semua',
     templatePage: 0,
     wizardData: { ...defaultWizardData },
-    aiModels: ['Gemini 2.5 Pro'],
-    selectedModel: 'Gemini 2.5 Pro',
+    aiModels: [],
+    selectedModel: null,
+    oauthToken: null,
 
     navigate: (page) => set({ currentPage: page }),
     setMode: (mode) => set({ mode }),
@@ -95,4 +108,5 @@ export const useAppStore = create<AppState>((set) => ({
         })),
     setAiModels: (models) => set({ aiModels: models }),
     setSelectedModel: (model) => set({ selectedModel: model }),
+    setOauthToken: (token) => set({ oauthToken: token }),
 }))

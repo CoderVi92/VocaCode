@@ -80,7 +80,7 @@ export default function App() {
                 <div className="h-3 w-px bg-white/10 mx-3" />
                 <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
                   <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
-                    {selectedModel || 'Loading AI...'}
+                    {selectedModel?.displayName || 'Loading AI...'}
                   </span>
                   <ChevronDown size={11} className="text-gray-500" />
                 </div>

@@ -1,7 +1,11 @@
 use tauri_plugin_opener::OpenerExt;
 use tiny_http::{Server, Response, Header};
 use reqwest::Client;
+use tauri::{AppHandle, Emitter};
 use serde::{Deserialize, Serialize};
+use futures_util::StreamExt;
+use eventsource_stream::Eventsource;
+use serde_json::Value;
 
 #[tauri::command]
 async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
@@ -183,11 +187,96 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
 }
 
 
+#[tauri::command]
+async fn execute_model_prompt(app: AppHandle, token: String, model: String, prompt: String) -> Result<(), String> {
+    let mut thinking_level = "low";
+    let base_model = if model.ends_with("-high") {
+        thinking_level = "high";
+        model.trim_end_matches("-high").to_string()
+    } else if model.ends_with("-low") {
+        thinking_level = "low";
+        model.trim_end_matches("-low").to_string()
+    } else if model.ends_with("-minimal") {
+        thinking_level = "minimal";
+        model.trim_end_matches("-minimal").to_string()
+    } else if model.ends_with("-medium") {
+        thinking_level = "medium";
+        model.trim_end_matches("-medium").to_string()
+    } else {
+        model.clone()
+    };
+
+    let payload = serde_json::json!({
+        "project": "rising-fact-p41fc",
+        "model": base_model,
+        "request": {
+            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
+            "generationConfig": {
+                "thinkingConfig": {
+                    "thinkingLevel": thinking_level
+                }
+            }
+        },
+        "requestType": "agent",
+        "userAgent": "antigravity",
+        "requestId": format!("agent-{}", uuid::Uuid::new_v4())
+    });
+
+    let client = reqwest::Client::new();
+    let res = client.post("https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse")
+        .bearer_auth(&token)
+        .header("User-Agent", "antigravity/1.18.3 windows/amd64")
+        .header("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
+        .header("Client-Metadata", r#"{"ideType":"ANTIGRAVITY","platform":"WINDOWS","pluginType":"GEMINI"}"#)
+        .header("Content-Type", "application/json")
+        .json(&payload)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    if !res.status().is_success() {
+        let err_text = res.text().await.unwrap_or_default();
+        return Err(format!("Google API Error: {}", err_text));
+    }
+
+    let mut stream = res.bytes_stream().eventsource();
+    
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(event) => {
+                let text = event.data;
+                if let Ok(json) = serde_json::from_str::<Value>(&text) {
+                    if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()) {
+                        if let Some(first) = candidates.get(0) {
+                            if let Some(content) = first.get("content") {
+                                if let Some(parts) = content.get("parts").and_then(|p| p.as_array()) {
+                                    for part in parts {
+                                        if let Some(text_chunk) = part.get("text").and_then(|t| t.as_str()) {
+                                            let _ = app.emit("ai_chunk", text_chunk);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            Err(e) => {
+                let _ = app.emit("ai_error", e.to_string());
+                break;
+            }
+        }
+    }
+    
+    let _ = app.emit("ai_complete", ());
+    Ok(())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .invoke_handler(tauri::generate_handler![login_oauth_proxy, fetch_gemini_models])
+        .invoke_handler(tauri::generate_handler![login_oauth_proxy, fetch_gemini_models, execute_model_prompt])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }
