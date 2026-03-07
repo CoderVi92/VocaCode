@@ -37,6 +37,8 @@ interface AppState {
     filter: string
     templatePage: number
     wizardData: WizardData
+    aiModels: string[]
+    selectedModel: string | null
 
     // Actions
     navigate: (page: AppPage) => void
@@ -48,6 +50,8 @@ interface AppState {
     setTemplatePage: (page: number) => void
     updateWizardData: (data: Partial<WizardData>) => void
     toggleWizardPage: (page: string) => void
+    setAiModels: (models: string[]) => void
+    setSelectedModel: (model: string) => void
 }
 
 const defaultWizardData: WizardData = {
@@ -68,6 +72,8 @@ export const useAppStore = create<AppState>((set) => ({
     filter: 'Semua',
     templatePage: 0,
     wizardData: { ...defaultWizardData },
+    aiModels: ['Gemini 2.5 Pro'],
+    selectedModel: 'Gemini 2.5 Pro',
 
     navigate: (page) => set({ currentPage: page }),
     setMode: (mode) => set({ mode }),
@@ -87,4 +93,6 @@ export const useAppStore = create<AppState>((set) => ({
                     : [...state.wizardData.pages, page],
             },
         })),
+    setAiModels: (models) => set({ aiModels: models }),
+    setSelectedModel: (model) => set({ selectedModel: model }),
 }))

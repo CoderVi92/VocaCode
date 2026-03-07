@@ -1,17 +1,34 @@
 import { motion } from 'framer-motion'
+import { invoke } from '@tauri-apps/api/core'
 import { useAppStore } from '../lib/store'
 import ScreenWrapper from '../components/ScreenWrapper'
 
 export default function LoginScreen() {
     const navigate = useAppStore((s) => s.navigate)
-    const setAuthenticated = useAppStore((s) => s.setAuthenticated)
 
-    const handleLogin = () => {
+    const handleLogin = async () => {
         navigate('loading')
-        setTimeout(() => {
-            setAuthenticated(true)
-            navigate('explorer')
-        }, 1500)
+        try {
+            const token: string = await invoke('login_oauth_proxy')
+            const models: string[] = await invoke('fetch_gemini_models', { token: token })
+
+            const store = useAppStore.getState()
+            store.setAiModels(models)
+            if (models.length > 0) {
+                store.setSelectedModel(models[0])
+            }
+
+            store.setAuthenticated(true)
+            store.navigate('explorer')
+        } catch (err) {
+            console.error("Tauri OAuth Error / API fallback:", err)
+            // Fallback for standard browser preview without Tauri window
+            setTimeout(() => {
+                const store = useAppStore.getState()
+                store.setAuthenticated(true)
+                store.navigate('explorer')
+            }, 1000)
+        }
     }
 
     return (
