@@ -1,167 +1,304 @@
-import { useState } from 'react'
-import { motion } from 'framer-motion'
-import { ChevronRight, ChevronLeft, Check } from 'lucide-react'
+import { motion, AnimatePresence } from 'framer-motion'
+import { Rocket, Globe, Database, CheckCircle2 } from 'lucide-react'
 import { useAppStore } from '../lib/store'
 import ScreenWrapper from '../components/ScreenWrapper'
+import type { AppPage } from '../lib/store'
 
-const steps = [
-    { id: 1, label: 'Identitas' },
-    { id: 2, label: 'Struktur' },
-    { id: 3, label: 'Teknis' },
-]
+const PAGE_OPTIONS = ['Home', 'Tentang Kami', 'Layanan', 'Portofolio', 'Tim Kami', 'Kontak', 'Blog', 'FAQ']
 
-const PAGE_OPTIONS = ['Home', 'Services', 'About', 'Portfolio', 'Testimonials', 'Contact']
+const STEP_MAP: Record<string, number> = { wizard1: 1, wizard2: 2, wizard3: 3 }
+const PREV_MAP: Record<string, AppPage> = { wizard1: 'explorer', wizard2: 'wizard1', wizard3: 'wizard2' }
+const NEXT_MAP: Record<string, AppPage> = { wizard1: 'wizard2', wizard2: 'wizard3', wizard3: 'final_preview' }
+
+const slide = {
+    initial: { opacity: 0, x: 20 },
+    animate: { opacity: 1, x: 0 },
+    exit: { opacity: 0, x: -20 },
+}
+
+
+// Floating label input
+function Input({
+    label, value, onChange, placeholder, type = 'text',
+}: {
+    label: string; value: string; onChange: (v: string) => void; placeholder: string; type?: string
+}) {
+    return (
+        <div className="group relative">
+            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 transition-colors group-focus-within:text-indigo-400">
+                {label}
+            </label>
+            <input
+                type={type}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder={placeholder}
+                className="w-full bg-gradient-to-b from-black/30 to-black/10 border border-white/[0.08] rounded-xl px-4 py-3.5 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-indigo-500/60 focus:bg-black/30 transition-all duration-200"
+            />
+        </div>
+    )
+}
+
+function Textarea({
+    label, value, onChange, placeholder, rows = 4,
+}: {
+    label: string; value: string; onChange: (v: string) => void; placeholder: string; rows?: number
+}) {
+    return (
+        <div className="group relative">
+            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-2 transition-colors group-focus-within:text-indigo-400">
+                {label}
+            </label>
+            <textarea
+                rows={rows}
+                value={value}
+                onChange={(e) => onChange(e.target.value)}
+                placeholder={placeholder}
+                className="w-full bg-gradient-to-b from-black/30 to-black/10 border border-white/[0.08] rounded-xl px-4 py-3.5 text-sm text-gray-200 placeholder:text-gray-600 focus:outline-none focus:border-indigo-500/60 focus:bg-black/30 transition-all duration-200 resize-none"
+            />
+        </div>
+    )
+}
 
 export default function WizardScreen() {
+    const currentPage = useAppStore((s) => s.currentPage)
     const navigate = useAppStore((s) => s.navigate)
-    const setWizardData = useAppStore((s) => s.setWizardData)
+    const wizardData = useAppStore((s) => s.wizardData)
+    const updateWizardData = useAppStore((s) => s.updateWizardData)
+    const toggleWizardPage = useAppStore((s) => s.toggleWizardPage)
     const selectedTemplate = useAppStore((s) => s.selectedTemplate)
 
-    const [step, setStep] = useState(1)
-    const [form, setForm] = useState({
-        projectName: '',
-        tagline: '',
-        businessDescription: '',
-        pages: ['Home', 'Contact'],
-        language: 'id' as 'id' | 'en',
-        outputType: 'static' as 'static' | 'dynamic',
-    })
+    const stepNum = STEP_MAP[currentPage] ?? 1
 
-    const updateField = (field: string, val: unknown) =>
-        setForm((prev) => ({ ...prev, [field]: val }))
-
-    const togglePage = (p: string) =>
-        setForm((prev) => ({
-            ...prev,
-            pages: prev.pages.includes(p) ? prev.pages.filter((x) => x !== p) : [...prev.pages, p],
-        }))
-
-    const handleFinish = () => {
-        setWizardData({ ...form })
-        navigate('preview')
+    const canProceed = () => {
+        if (currentPage === 'wizard1') {
+            return wizardData.projectName.trim() !== '' &&
+                wizardData.tagline.trim() !== '' &&
+                wizardData.description.trim() !== ''
+        }
+        if (currentPage === 'wizard2') {
+            return wizardData.pages.length > 0
+        }
+        return true
     }
 
     return (
         <ScreenWrapper>
-            <div className="flex flex-col h-full p-6 overflow-hidden">
-                {/* Step Indicator */}
-                <div className="flex items-center gap-2 mb-6 shrink-0">
-                    {steps.map((s, i) => (
-                        <div key={s.id} className="flex items-center gap-2">
-                            <div
-                                className={`w-7 h-7 rounded-full flex items-center justify-center text-xs font-bold transition-colors
-                  ${step > s.id ? 'bg-indigo-500 text-white' : step === s.id ? 'bg-indigo-600 text-white' : 'bg-[var(--color-bg-elevated)] text-[var(--color-text-muted)]'}`}
-                            >
-                                {step > s.id ? <Check size={13} /> : s.id}
+            <motion.div
+                initial={{ opacity: 0, y: 16 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.35, ease: 'easeOut' }}
+                className="m-auto w-full max-w-2xl bg-[#11141b] rounded-2xl border border-white/[0.07] overflow-hidden shadow-2xl shadow-black/50"
+            >
+                {/* Header */}
+                <div className="px-8 py-5 border-b border-white/5 bg-gradient-to-r from-[#161a24] to-[#131720] flex justify-between items-center">
+                    <div>
+                        <h2 className="text-xl font-bold text-white">Konfigurasi AI</h2>
+                        {selectedTemplate && (
+                            <p className="text-[10px] text-gray-500 mt-0.5 flex items-center gap-1.5">
+                                <span className="w-1 h-1 rounded-full bg-indigo-400 inline-block" />
+                                Template: <span className="text-indigo-400 font-semibold">{selectedTemplate.title}</span>
+                            </p>
+                        )}
+                    </div>
+
+                    {/* Step progress bars */}
+                    <div className="flex items-center gap-2">
+                        {[1, 2, 3].map((i) => (
+                            <div key={i} className="flex flex-col items-center gap-1">
+                                <div
+                                    className={`h-1 rounded-full transition-all duration-500 ${stepNum === i ? 'bg-indigo-500 w-10' : stepNum > i ? 'bg-indigo-500/40 w-7' : 'bg-gray-800 w-7'
+                                        }`}
+                                />
                             </div>
-                            <span className={`text-xs font-medium ${step === s.id ? 'text-indigo-400' : 'text-[var(--color-text-muted)]'}`}>{s.label}</span>
-                            {i < steps.length - 1 && <div className="w-12 h-px bg-[var(--color-border)] mx-1" />}
-                        </div>
-                    ))}
-                    {selectedTemplate && (
-                        <span className="ml-auto text-xs text-[var(--color-text-muted)]">Template: <span className="text-indigo-400">{selectedTemplate.title}</span></span>
-                    )}
+                        ))}
+                    </div>
                 </div>
 
-                {/* Step Content */}
-                <div className="flex-1 overflow-auto">
-                    {step === 1 && (
-                        <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="flex flex-col gap-4 max-w-lg">
-                            <h2 className="text-lg font-semibold">Identitas Bisnis</h2>
-                            <div>
-                                <label className="text-xs text-[var(--color-text-muted)] mb-1 block">Nama Project *</label>
-                                <input value={form.projectName} onChange={(e) => updateField('projectName', e.target.value)}
-                                    className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors" placeholder="contoh: TechCorp Solutions" />
-                            </div>
-                            <div>
-                                <label className="text-xs text-[var(--color-text-muted)] mb-1 block">Tagline</label>
-                                <input value={form.tagline} onChange={(e) => updateField('tagline', e.target.value)}
-                                    className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors" placeholder="Slogan singkat perusahaan Anda" />
-                            </div>
-                            <div>
-                                <label className="text-xs text-[var(--color-text-muted)] mb-1 block">Deskripsi Bisnis</label>
-                                <textarea value={form.businessDescription} onChange={(e) => updateField('businessDescription', e.target.value)}
-                                    rows={4} className="w-full bg-[var(--color-bg-elevated)] border border-[var(--color-border)] rounded-lg px-4 py-2.5 text-sm focus:outline-none focus:border-indigo-500 transition-colors resize-none" placeholder="Jelaskan secara singkat bisnis atau layanan Anda..." />
-                            </div>
-                        </motion.div>
-                    )}
+                {/* STEP CONTENT */}
+                <div className="px-8 py-8 min-h-[340px] flex flex-col justify-center">
+                    <AnimatePresence mode="wait">
 
-                    {step === 2 && (
-                        <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="flex flex-col gap-4 max-w-lg">
-                            <h2 className="text-lg font-semibold">Struktur Halaman</h2>
-                            <p className="text-sm text-[var(--color-text-muted)]">Pilih halaman yang ingin Anda sertakan dalam website:</p>
-                            <div className="grid grid-cols-3 gap-2">
-                                {PAGE_OPTIONS.map((p) => (
-                                    <button key={p} onClick={() => togglePage(p)}
-                                        className={`py-2 px-3 rounded-lg text-sm font-medium border transition-all cursor-pointer
-                      ${form.pages.includes(p) ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300' : 'bg-[var(--color-bg-elevated)] border-[var(--color-border)] text-[var(--color-text-muted)] hover:border-indigo-500/40'}`}
-                                    >
-                                        {p}
-                                    </button>
-                                ))}
-                            </div>
-                            <p className="text-xs text-[var(--color-text-muted)]">Dipilih: {form.pages.join(', ')}</p>
-                        </motion.div>
-                    )}
-
-                    {step === 3 && (
-                        <motion.div initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} className="flex flex-col gap-4 max-w-lg">
-                            <h2 className="text-lg font-semibold">Konfigurasi Teknis</h2>
-                            <div>
-                                <label className="text-xs text-[var(--color-text-muted)] mb-2 block">Bahasa</label>
-                                <div className="flex gap-2">
-                                    {(['id', 'en'] as const).map((lang) => (
-                                        <button key={lang} onClick={() => updateField('language', lang)}
-                                            className={`flex-1 py-2.5 rounded-lg text-sm font-medium border transition-all cursor-pointer
-                        ${form.language === lang ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300' : 'bg-[var(--color-bg-elevated)] border-[var(--color-border)] text-[var(--color-text-muted)]'}`}
-                                        >
-                                            {lang === 'id' ? '🇮🇩 Bahasa Indonesia' : '🇬🇧 English'}
-                                        </button>
-                                    ))}
+                        {/* Wizard 1 — Identitas */}
+                        {currentPage === 'wizard1' && (
+                            <motion.div key="w1" variants={slide} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.3 }} className="space-y-5">
+                                <div className="mb-2">
+                                    <div className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest mb-1">Langkah 1 dari 3</div>
+                                    <h3 className="text-lg font-bold text-white">Identitas Bisnis</h3>
+                                    <p className="text-xs text-gray-500 mt-1">Informasi ini akan digunakan AI untuk menyesuaikan konten website Anda.</p>
                                 </div>
-                            </div>
-                            <div>
-                                <label className="text-xs text-[var(--color-text-muted)] mb-2 block">Tipe Output</label>
-                                <div className="flex gap-2">
-                                    {(['static', 'dynamic'] as const).map((type) => (
-                                        <button key={type} onClick={() => updateField('outputType', type)}
-                                            className={`flex-1 py-2.5 rounded-lg text-sm font-medium border transition-all cursor-pointer
-                        ${form.outputType === type ? 'bg-indigo-600/20 border-indigo-500 text-indigo-300' : 'bg-[var(--color-bg-elevated)] border-[var(--color-border)] text-[var(--color-text-muted)]'}`}
-                                        >
-                                            {type === 'static' ? '⚡ Static HTML/CSS' : '🗄️ Dynamic (Database)'}
-                                        </button>
-                                    ))}
+
+                                <div className="w-full h-px bg-gradient-to-r from-indigo-500/30 via-white/5 to-transparent mb-5" />
+
+                                <Input
+                                    label="Nama Perusahaan / Project"
+                                    value={wizardData.projectName}
+                                    onChange={(v) => updateWizardData({ projectName: v })}
+                                    placeholder="Contoh: PT Maju Bersama, PortofolioSaya"
+                                />
+                                <Input
+                                    label="Tagline / Slogan"
+                                    value={wizardData.tagline}
+                                    onChange={(v) => updateWizardData({ tagline: v })}
+                                    placeholder="Contoh: Solusi Digital Terpercaya"
+                                />
+                                <Textarea
+                                    label="Deskripsi Singkat"
+                                    value={wizardData.description}
+                                    onChange={(v) => updateWizardData({ description: v })}
+                                    placeholder="Ceritakan tentang bisnis Anda, layanan yang ditawarkan, dan target audiens..."
+                                    rows={3}
+                                />
+                            </motion.div>
+                        )}
+
+                        {/* Wizard 2 — Struktur halaman */}
+                        {currentPage === 'wizard2' && (
+                            <motion.div key="w2" variants={slide} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.3 }}>
+                                <div className="mb-6">
+                                    <div className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest mb-1">Langkah 2 dari 3</div>
+                                    <h3 className="text-lg font-bold text-white">Struktur Halaman</h3>
+                                    <p className="text-xs text-gray-500 mt-1">Pilih halaman yang ingin Anda sertakan. AI akan menyesuaikan navigasi secara otomatis.</p>
                                 </div>
-                            </div>
-                        </motion.div>
-                    )}
+
+                                <div className="w-full h-px bg-gradient-to-r from-indigo-500/30 via-white/5 to-transparent mb-6" />
+
+                                <div className="grid grid-cols-2 gap-3">
+                                    {PAGE_OPTIONS.map((item) => {
+                                        const active = wizardData.pages.includes(item)
+                                        return (
+                                            <motion.button
+                                                key={item}
+                                                whileHover={{ scale: 1.01 }}
+                                                whileTap={{ scale: 0.99 }}
+                                                onClick={() => toggleWizardPage(item)}
+                                                className={`flex items-center gap-3 px-4 py-3.5 rounded-xl border transition-all duration-200 cursor-pointer text-left ${active
+                                                    ? 'bg-indigo-600/10 border-indigo-500/40 shadow-sm shadow-indigo-600/10'
+                                                    : 'bg-white/[0.03] border-white/[0.07] hover:border-indigo-500/20 hover:bg-white/5'
+                                                    }`}
+                                            >
+                                                <div
+                                                    className={`w-5 h-5 rounded-md border-2 flex items-center justify-center shrink-0 transition-all duration-200 ${active ? 'bg-indigo-600 border-indigo-600' : 'border-white/10'
+                                                        }`}
+                                                >
+                                                    {active && (
+                                                        <motion.div
+                                                            initial={{ scale: 0, rotate: -90 }}
+                                                            animate={{ scale: 1, rotate: 0 }}
+                                                            transition={{ duration: 0.2 }}
+                                                        >
+                                                            <CheckCircle2 size={11} className="text-white" />
+                                                        </motion.div>
+                                                    )}
+                                                </div>
+                                                <span className={`text-sm font-medium transition-colors duration-200 ${active ? 'text-indigo-300' : 'text-gray-500'}`}>
+                                                    {item}
+                                                </span>
+                                            </motion.button>
+                                        )
+                                    })}
+                                </div>
+
+                                {wizardData.pages.length > 0 && (
+                                    <p className="text-[10px] text-gray-600 mt-4">
+                                        Dipilih: <span className="text-indigo-400">{wizardData.pages.join(' · ')}</span>
+                                    </p>
+                                )}
+                            </motion.div>
+                        )}
+
+                        {/* Wizard 3 — Teknis */}
+                        {currentPage === 'wizard3' && (
+                            <motion.div key="w3" variants={slide} initial="initial" animate="animate" exit="exit" transition={{ duration: 0.3 }} className="space-y-8">
+                                <div className="mb-2">
+                                    <div className="text-[10px] text-indigo-400 font-bold uppercase tracking-widest mb-1">Langkah 3 dari 3</div>
+                                    <h3 className="text-lg font-bold text-white">Konfigurasi Teknis</h3>
+                                    <p className="text-xs text-gray-500 mt-1">Tentukan bahasa dan tipe output untuk website Anda.</p>
+                                </div>
+
+                                <div className="w-full h-px bg-gradient-to-r from-indigo-500/30 via-white/5 to-transparent" />
+
+                                <div>
+                                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">Bahasa Tampilan Website</label>
+                                    <div className="flex gap-3">
+                                        {(['id', 'en'] as const).map((lang) => (
+                                            <button
+                                                key={lang}
+                                                onClick={() => updateWizardData({ language: lang })}
+                                                className={`flex-1 py-3.5 rounded-xl text-sm font-bold border transition-all duration-200 cursor-pointer ${wizardData.language === lang
+                                                    ? 'bg-indigo-600/10 border-indigo-500/50 text-indigo-300 shadow-sm shadow-indigo-600/10'
+                                                    : 'bg-white/[0.03] border-white/[0.07] text-gray-500 hover:text-gray-300 hover:border-white/10'
+                                                    }`}
+                                            >
+                                                {lang === 'id' ? '🇮🇩  Bahasa Indonesia' : '🇺🇸  English'}
+                                            </button>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                <div>
+                                    <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-3">Tipe Output Project</label>
+                                    <div className="grid grid-cols-2 gap-3">
+                                        <button
+                                            onClick={() => updateWizardData({ outputType: 'static' })}
+                                            className={`p-6 rounded-xl text-center space-y-3 cursor-pointer transition-all duration-200 border ${wizardData.outputType === 'static'
+                                                ? 'bg-indigo-600/10 border-indigo-500/50 shadow-sm shadow-indigo-600/10'
+                                                : 'bg-white/[0.03] border-white/[0.07] hover:border-indigo-500/20'
+                                                }`}
+                                        >
+                                            <Globe className={`mx-auto ${wizardData.outputType === 'static' ? 'text-indigo-400' : 'text-gray-600'}`} size={28} />
+                                            <div>
+                                                <p className={`font-bold text-sm ${wizardData.outputType === 'static' ? 'text-indigo-300' : 'text-gray-400'}`}>Static Web</p>
+                                                <p className={`text-[9px] mt-0.5 ${wizardData.outputType === 'static' ? 'text-indigo-400/60' : 'text-gray-600'}`}>HTML + CSS + JS</p>
+                                            </div>
+                                        </button>
+
+                                        <div className="p-6 bg-white/[0.02] border border-white/5 rounded-xl text-center space-y-3 opacity-35 cursor-not-allowed">
+                                            <Database className="mx-auto text-gray-600" size={28} />
+                                            <div>
+                                                <p className="font-bold text-sm text-gray-500">Full Database</p>
+                                                <p className="text-[9px] mt-0.5 text-gray-700">Node.js + SQLite</p>
+                                                <p className="text-[8px] mt-1 text-gray-700 uppercase tracking-wider">Coming Soon</p>
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                            </motion.div>
+                        )}
+                    </AnimatePresence>
                 </div>
 
-                {/* Navigation Buttons */}
-                <div className="flex justify-between pt-4 border-t border-[var(--color-border)] shrink-0">
-                    <button
-                        onClick={() => step > 1 ? setStep(s => s - 1) : navigate('explorer')}
-                        className="flex items-center gap-2 px-4 py-2 rounded-lg bg-[var(--color-bg-elevated)] hover:bg-[var(--color-border)] text-sm text-[var(--color-text-muted)] transition-colors cursor-pointer"
-                    >
-                        <ChevronLeft size={16} /> Kembali
-                    </button>
-                    {step < 3 ? (
+                {/* Footer Nav */}
+                <div className="px-8 py-5 bg-[#0e1117] border-t border-white/5 flex items-center justify-between gap-4 w-full">
+                    <div className="flex-1">
                         <button
-                            onClick={() => setStep((s) => s + 1)}
-                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-sm text-white font-medium transition-colors cursor-pointer"
+                            onClick={() => navigate(PREV_MAP[currentPage])}
+                            className="px-5 py-2.5 rounded-xl bg-white/5 text-xs font-bold hover:bg-white/8 transition-all active:scale-95 cursor-pointer text-gray-400 hover:text-gray-200 border border-white/5 whitespace-nowrap"
                         >
-                            Lanjut <ChevronRight size={16} />
+                            ← Kembali
                         </button>
-                    ) : (
+                    </div>
+
+                    <div className="shrink-0 flex items-center gap-2 justify-center">
+                        {[1, 2, 3].map((i) => (
+                            <div key={i} className={`w-1.5 h-1.5 rounded-full transition-all duration-300 ${stepNum === i ? 'bg-indigo-400 scale-125' : stepNum > i ? 'bg-indigo-600/40' : 'bg-gray-700'}`} />
+                        ))}
+                    </div>
+
+                    <div className="flex-1 flex justify-end">
                         <button
-                            onClick={handleFinish}
-                            className="flex items-center gap-2 px-4 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-sm text-white font-medium transition-colors cursor-pointer"
+                            onClick={() => canProceed() && navigate(NEXT_MAP[currentPage])}
+                            disabled={!canProceed()}
+                            className={`px-7 py-2.5 rounded-xl text-xs font-bold whitespace-nowrap transition-all flex items-center justify-center gap-2 active:scale-95 shadow-lg ${canProceed()
+                                    ? 'bg-indigo-600 text-white hover:bg-indigo-500 shadow-indigo-600/20 cursor-pointer'
+                                    : 'bg-white/5 text-gray-500 cursor-not-allowed shadow-none border border-white/5'
+                                }`}
                         >
-                            Generate Website <Check size={16} />
+                            {currentPage === 'wizard3' ? <><Rocket size={13} className="shrink-0" /> Generate & Sync</> : 'Lanjut →'}
                         </button>
-                    )}
+                    </div>
                 </div>
-            </div>
+            </motion.div>
         </ScreenWrapper>
     )
 }

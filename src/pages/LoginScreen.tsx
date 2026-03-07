@@ -1,5 +1,4 @@
 import { motion } from 'framer-motion'
-import { LogIn, Zap } from 'lucide-react'
 import { useAppStore } from '../lib/store'
 import ScreenWrapper from '../components/ScreenWrapper'
 
@@ -9,58 +8,100 @@ export default function LoginScreen() {
 
     const handleLogin = () => {
         navigate('loading')
-        // Simulate OAuth flow - will be replaced with real CLIProxy Auth in Phase 4
         setTimeout(() => {
             setAuthenticated(true)
             navigate('explorer')
-        }, 2000)
+        }, 1500)
     }
 
     return (
         <ScreenWrapper>
-            <div className="flex-1 flex flex-col items-center justify-center gap-8 p-8">
-                {/* Logo */}
+            {/* Ambient background glows */}
+            <div className="pointer-events-none absolute inset-0 overflow-hidden">
+                <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-96 h-96 bg-indigo-600/10 rounded-full blur-[100px]" />
+                <div className="absolute bottom-0 left-1/4 w-64 h-64 bg-violet-600/8 rounded-full blur-[80px]" />
+            </div>
+
+            <motion.div
+                initial={{ opacity: 0, y: 24 }}
+                animate={{ opacity: 1, y: 0 }}
+                transition={{ duration: 0.5, ease: 'easeOut' }}
+                className="m-auto relative z-10 w-full max-w-sm text-center"
+            >
+                {/* Logo mark */}
                 <motion.div
-                    initial={{ scale: 0.8, opacity: 0 }}
-                    animate={{ scale: 1, opacity: 1 }}
-                    transition={{ delay: 0.1, duration: 0.5, type: 'spring' }}
-                    className="flex flex-col items-center gap-3"
+                    initial={{ opacity: 0, scale: 0.8 }}
+                    animate={{ opacity: 1, scale: 1 }}
+                    transition={{ delay: 0.1, duration: 0.5, ease: 'easeOut' }}
+                    className="mb-8"
                 >
-                    <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-indigo-500 to-indigo-700 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-                        <Zap size={32} className="text-white" />
+                    {/* Animated symbol */}
+                    <div className="relative inline-block">
+                        <motion.div
+                            animate={{ opacity: [0.4, 1, 0.4] }}
+                            transition={{ duration: 3, repeat: Infinity, ease: 'easeInOut' }}
+                            className="absolute -inset-4 bg-indigo-600/20 rounded-full blur-xl"
+                        />
+                        <div className="relative text-[52px] font-extralight italic tracking-widest text-transparent bg-clip-text bg-gradient-to-br from-indigo-400 via-indigo-300 to-violet-400 leading-none select-none">
+                            {'</>'}
+                        </div>
                     </div>
-                    <div className="text-center">
-                        <h1 className="text-3xl font-bold tracking-tight">
-                            VOCA<span className="text-indigo-400">CODE</span>
-                        </h1>
-                        <p className="text-sm text-[var(--color-text-muted)] mt-1">AI-Powered No-Code Website Builder</p>
-                    </div>
+                </motion.div>
+
+                {/* Title */}
+                <motion.div
+                    initial={{ opacity: 0, y: 8 }}
+                    animate={{ opacity: 1, y: 0 }}
+                    transition={{ delay: 0.2, duration: 0.4 }}
+                >
+                    <h1 className="text-4xl font-black text-white tracking-tight mb-1">VocaCode</h1>
+                    <p className="text-gray-500 text-[13px] italic tracking-wide mb-10">
+                        Autentikasi OAuth via Proxy CLI
+                    </p>
                 </motion.div>
 
                 {/* Login Card */}
                 <motion.div
-                    initial={{ y: 20, opacity: 0 }}
-                    animate={{ y: 0, opacity: 1 }}
+                    initial={{ opacity: 0, y: 12 }}
+                    animate={{ opacity: 1, y: 0 }}
                     transition={{ delay: 0.3, duration: 0.4 }}
-                    className="w-full max-w-sm bg-[var(--color-bg-surface)] border border-[var(--color-border)] rounded-xl p-6 shadow-xl"
+                    className="bg-[#11141b] border border-white/[0.07] rounded-2xl p-8 shadow-2xl shadow-black/40 backdrop-blur-sm"
                 >
-                    <h2 className="text-lg font-semibold mb-2">Selamat Datang</h2>
-                    <p className="text-sm text-[var(--color-text-muted)] mb-6">
-                        Login dengan akun Google untuk mengakses AI dan mulai membangun website impian Anda.
+                    {/* Decorative top line */}
+                    <div className="w-12 h-px bg-gradient-to-r from-transparent via-indigo-500 to-transparent mx-auto mb-6" />
+
+                    <p className="text-gray-400 text-sm mb-6 leading-relaxed">
+                        Masuk dengan akun Google Anda untuk mengakses model AI dan mulai membangun website impian Anda.
                     </p>
-                    <button
+
+                    {/* Google Login Button */}
+                    <motion.button
+                        whileHover={{ scale: 1.02, backgroundColor: '#f3f4f6' }}
+                        whileTap={{ scale: 0.97 }}
                         onClick={handleLogin}
-                        className="w-full flex items-center justify-center gap-3 bg-indigo-600 hover:bg-indigo-500 text-white font-medium py-2.5 px-4 rounded-lg transition-colors duration-200 cursor-pointer"
+                        transition={{ duration: 0.15 }}
+                        className="flex items-center justify-center gap-3 w-full bg-white text-gray-900 py-3.5 px-5 rounded-xl font-bold text-sm shadow-xl shadow-black/20 cursor-pointer"
                     >
-                        <LogIn size={18} />
-                        Login dengan Google
-                    </button>
+                        <img src="https://www.google.com/favicon.ico" className="w-4 h-4" alt="G" />
+                        Masuk dengan Google
+                    </motion.button>
+
+                    <p className="text-[10px] text-gray-600 mt-5 leading-relaxed">
+                        Token disimpan secara aman di lokal. Tidak ada data yang dikirim ke server pihak ketiga.
+                    </p>
                 </motion.div>
 
-                <p className="text-xs text-[var(--color-text-muted)] text-center max-w-xs">
-                    Autentikasi diproses via OAuth proxy yang aman. Token Anda disimpan secara lokal.
-                </p>
-            </div>
+                {/* Bottom badge */}
+                <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ delay: 0.5 }}
+                    className="mt-6 flex items-center justify-center gap-2 text-[10px] text-gray-700"
+                >
+                    <div className="w-1 h-1 rounded-full bg-green-500" />
+                    <span>Sistem OAuth tersedia</span>
+                </motion.div>
+            </motion.div>
         </ScreenWrapper>
     )
 }

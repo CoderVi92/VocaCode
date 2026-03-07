@@ -1,48 +1,90 @@
 import { create } from 'zustand'
 
-export type AppPage = 'login' | 'loading' | 'explorer' | 'wizard' | 'preview'
+export type AppPage =
+    | 'login'
+    | 'loading'
+    | 'explorer'
+    | 'wizard1'
+    | 'wizard2'
+    | 'wizard3'
+    | 'final_preview'
 
-interface AppState {
-    currentPage: AppPage
-    isAuthenticated: boolean
-    selectedTemplate: TemplateItem | null
-    wizardData: WizardData | null
-
-    // Actions
-    navigate: (page: AppPage) => void
-    setAuthenticated: (val: boolean) => void
-    setSelectedTemplate: (template: TemplateItem | null) => void
-    setWizardData: (data: WizardData | null) => void
-}
+export type AppMode = 'BASIC' | 'ADVANCE'
 
 export interface TemplateItem {
-    id: string
+    id: number
     title: string
-    description: string
-    thumbnail: string
-    html: string
-    css: string
-    js: string
-    tags: string[]
+    author: string
+    img: string
+    tag: string
 }
 
 export interface WizardData {
     projectName: string
     tagline: string
-    businessDescription: string
+    description: string
     pages: string[]
     language: 'id' | 'en'
     outputType: 'static' | 'dynamic'
 }
 
+interface AppState {
+    currentPage: AppPage
+    mode: AppMode
+    isAuthenticated: boolean
+    isProfileOpen: boolean
+    selectedTemplate: TemplateItem | null
+    filter: string
+    templatePage: number
+    wizardData: WizardData
+
+    // Actions
+    navigate: (page: AppPage) => void
+    setMode: (mode: AppMode) => void
+    setAuthenticated: (val: boolean) => void
+    setProfileOpen: (val: boolean) => void
+    setSelectedTemplate: (t: TemplateItem | null) => void
+    setFilter: (filter: string) => void
+    setTemplatePage: (page: number) => void
+    updateWizardData: (data: Partial<WizardData>) => void
+    toggleWizardPage: (page: string) => void
+}
+
+const defaultWizardData: WizardData = {
+    projectName: '',
+    tagline: '',
+    description: '',
+    pages: ['Home', 'Layanan', 'Kontak'],
+    language: 'id',
+    outputType: 'static',
+}
+
 export const useAppStore = create<AppState>((set) => ({
     currentPage: 'login',
+    mode: 'BASIC',
     isAuthenticated: false,
+    isProfileOpen: false,
     selectedTemplate: null,
-    wizardData: null,
+    filter: 'Semua',
+    templatePage: 0,
+    wizardData: { ...defaultWizardData },
 
     navigate: (page) => set({ currentPage: page }),
+    setMode: (mode) => set({ mode }),
     setAuthenticated: (val) => set({ isAuthenticated: val }),
-    setSelectedTemplate: (template) => set({ selectedTemplate: template }),
-    setWizardData: (data) => set({ wizardData: data }),
+    setProfileOpen: (val) => set({ isProfileOpen: val }),
+    setSelectedTemplate: (t) => set({ selectedTemplate: t }),
+    setFilter: (filter) => set({ filter, templatePage: 0 }),
+    setTemplatePage: (page) => set({ templatePage: page }),
+    updateWizardData: (data) =>
+        set((state) => ({ wizardData: { ...state.wizardData, ...data } })),
+    toggleWizardPage: (page) =>
+        set((state) => ({
+            wizardData: {
+                ...state.wizardData,
+                pages: state.wizardData.pages.includes(page)
+                    ? state.wizardData.pages.filter((p) => p !== page)
+                    : [...state.wizardData.pages, page],
+            },
+        })),
 }))
