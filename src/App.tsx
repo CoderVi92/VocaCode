@@ -1,7 +1,7 @@
 import { useRef, useEffect } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
 import {
-  Settings, ChevronDown, LayoutGrid, Search, Monitor,
+  ChevronDown, LayoutGrid, Search, Monitor,
   Mail, CheckCircle2, Github, LogOut, Minus, Square, X,
   Link2, Zap
 } from 'lucide-react'
@@ -66,20 +66,20 @@ export default function App() {
           >
             {/* Left — Logo + Model selector */}
             <div className="flex items-center gap-3">
-              <div className="bg-indigo-600 w-6 h-6 rounded flex items-center justify-center shadow-lg shadow-indigo-600/20">
+              <div className="bg-indigo-600 w-6 h-6 rounded flex items-center justify-center shadow-lg shadow-indigo-600/20 shrink-0">
                 <span className="font-bold text-[10px] text-white uppercase tracking-tighter leading-none">VC</span>
               </div>
-              {mode === 'ADVANCE' && <Settings size={15} className="text-gray-500" />}
 
-              <div className="flex items-center bg-white/5 rounded-md px-2 py-1 ml-2 cursor-default">
-                <div className="flex items-center gap-1 text-[11px] text-gray-400">
-                  <ChevronDown size={12} />
-                  <span>Perencanaan</span>
+              {/* Model Selectors (Always visible in BASIC/ADVANCE) */}
+              <div className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors">
+                <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
+                  <span className="group-hover:text-gray-200 transition-colors">Perencanaan</span>
+                  <ChevronDown size={11} className="text-gray-500" />
                 </div>
-                <div className="h-3 w-px bg-white/10 mx-2" />
-                <div className="flex items-center gap-1 text-[11px] text-gray-300 font-semibold">
-                  <ChevronDown size={12} />
-                  <span>Gemini 2.5 Pro</span>
+                <div className="h-3 w-px bg-white/10 mx-3" />
+                <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
+                  <span className="group-hover:text-indigo-200 transition-colors">Gemini 2.5 Pro</span>
+                  <ChevronDown size={11} className="text-gray-500" />
                 </div>
               </div>
             </div>
