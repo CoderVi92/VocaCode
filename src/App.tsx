@@ -22,6 +22,7 @@ export default function App() {
   const isProfileOpen = useAppStore((s) => s.isProfileOpen)
   const setProfileOpen = useAppStore((s) => s.setProfileOpen)
   const navigate = useAppStore((s) => s.navigate)
+  const selectedModel = useAppStore((s) => s.selectedModel)
   const profileRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
@@ -78,7 +79,9 @@ export default function App() {
                 </div>
                 <div className="h-3 w-px bg-white/10 mx-3" />
                 <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
-                  <span className="group-hover:text-indigo-200 transition-colors">Gemini 2.5 Pro</span>
+                  <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
+                    {selectedModel || 'Loading AI...'}
+                  </span>
                   <ChevronDown size={11} className="text-gray-500" />
                 </div>
               </div>
