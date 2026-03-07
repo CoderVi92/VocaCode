@@ -96,35 +96,92 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
     Ok(token_data.access_token)
 }
 
-#[derive(Deserialize)]
-struct GeminiModelsResponse {
-    models: Vec<GeminiModel>,
+#[derive(serde::Serialize)]
+struct AntigravityModel {
+    id: String,
+    name: String,
+    #[serde(rename = "displayName")]
+    display_name: String,
+    description: String,
+    #[serde(rename = "inputTokenLimit")]
+    input_token_limit: u32,
+    #[serde(rename = "outputTokenLimit")]
+    output_token_limit: u32,
+    source: String,
 }
 
-#[derive(Deserialize)]
-struct GeminiModel {
 #[tauri::command]
-async fn fetch_gemini_models(_token: String) -> Result<Vec<String>, String> {
-    // CLIProxyAPI Engine Analysis:
-    // router-for-me DOES NOT use Google's /v1beta/models endpoint to list models because
-    // typical OAuth Bearer tokens (with profile/email scopes) lack the GCP Project IAM permissions
-    // required to list models dynamically without an explicit API Key or Service Account.
-    // Instead, CLIProxyAPI uses an internal Global Registry to provide supported models.
-    // We replicate that identical architecture here in VocaCode:
-    
-    let supported_models = vec![
-        "gemini-2.5-pro".to_string(),
-        "gemini-2.5-flash".to_string(),
-        "gemini-2.0-pro-exp-02-05".to_string(),
-        "gemini-2.0-flash-thinking-exp-01-21".to_string(),
-        "gemini-2.0-flash".to_string(),
-        "gemini-1.5-pro".to_string(),
-        "gemini-1.5-flash".to_string(),
+async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
+    // Hardcoded List based on fares-antigravity-oauth for VocaCode God Mode
+    let models = vec![
+        AntigravityModel {
+            id: "antigravity-gemini-3.1-pro".into(),
+            name: "antigravity-gemini-3.1-pro".into(),
+            display_name: "Gemini 3.1 Pro".into(),
+            description: "Gemini 3.1 Pro via Antigravity quota. Variants: -low, -high".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_535,
+            source: "antigravity".into(),
+        },
+        AntigravityModel {
+            id: "antigravity-gemini-3.1-pro-high".into(),
+            name: "antigravity-gemini-3.1-pro-high".into(),
+            display_name: "Gemini 3.1 Pro (High)".into(),
+            description: "Gemini 3.1 Pro with high thinking via Antigravity quota".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_535,
+            source: "antigravity".into(),
+        },
+        AntigravityModel {
+            id: "antigravity-gemini-3.1-pro-low".into(),
+            name: "antigravity-gemini-3.1-pro-low".into(),
+            display_name: "Gemini 3.1 Pro (Low)".into(),
+            description: "Gemini 3.1 Pro with low thinking via Antigravity quota".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_535,
+            source: "antigravity".into(),
+        },
+        AntigravityModel {
+            id: "antigravity-gemini-3-flash".into(),
+            name: "antigravity-gemini-3-flash".into(),
+            display_name: "Gemini 3 Flash".into(),
+            description: "Gemini 3 Flash via Antigravity quota. Variants: -minimal, -low, -medium, -high".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_536,
+            source: "antigravity".into(),
+        },
+         AntigravityModel {
+            id: "antigravity-claude-sonnet-4-6".into(),
+            name: "antigravity-claude-sonnet-4-6".into(),
+            display_name: "Claude Sonnet 4.6".into(),
+            description: "Claude Sonnet 4.6 via Antigravity quota".into(),
+            input_token_limit: 200_000,
+            output_token_limit: 64_000,
+            source: "antigravity".into(),
+        },
+        AntigravityModel {
+            id: "antigravity-claude-opus-4-6-thinking".into(),
+            name: "antigravity-claude-opus-4-6-thinking".into(),
+            display_name: "Claude Opus 4.6 (Thinking)".into(),
+            description: "Claude Opus 4.6 with extended thinking via Antigravity quota.".into(),
+            input_token_limit: 200_000,
+            output_token_limit: 64_000,
+            source: "antigravity".into(),
+        },
+        AntigravityModel {
+            id: "gemini-2.5-pro".into(),
+            name: "gemini-2.5-pro".into(),
+            display_name: "Gemini 2.5 Pro".into(),
+            description: "Gemini 2.5 Pro via Gemini CLI quota".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_536,
+            source: "gemini-cli".into(),
+        },
     ];
 
-    // Return the registry list successfully to React without triggering any fallback mechanism.
-    Ok(supported_models)
+    Ok(models)
 }
+
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
