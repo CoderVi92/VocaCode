@@ -9,9 +9,9 @@ use serde_json::Value;
 
 #[tauri::command]
 async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
-    let server = Server::http("127.0.0.1:8085").map_err(|e| e.to_string())?;
+    let server = Server::http("127.0.0.1:51121").map_err(|e| e.to_string())?;
     
-    let auth_url = "https://accounts.google.com/o/oauth2/v2/auth?client_id=681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com&redirect_uri=http://localhost:8085/oauth2callback&response_type=code&scope=https://www.googleapis.com/auth/cloud-platform%20https://www.googleapis.com/auth/userinfo.email%20https://www.googleapis.com/auth/userinfo.profile";
+    let auth_url = "https://accounts.google.com/o/oauth2/v2/auth?client_id=1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com&redirect_uri=http://localhost:51121/oauth2callback&response_type=code&scope=https://www.googleapis.com/auth/cloud-platform%20https://www.googleapis.com/auth/userinfo.email%20https://www.googleapis.com/auth/userinfo.profile%20https://www.googleapis.com/auth/cclog%20https://www.googleapis.com/auth/experimentsandconfigs";
     
     app.opener().open_url(auth_url, None::<&str>).map_err(|e| e.to_string())?;
 
@@ -80,11 +80,11 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
     let client = Client::new();
     let res = client.post("https://oauth2.googleapis.com/token")
         .form(&TokenRequest {
-            client_id: "681255809395-oo8ft2oprdrnp9e3aqf6av3hmdib135j.apps.googleusercontent.com".into(),
-            client_secret: "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".into(),
+            client_id: "1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com".into(),
+            client_secret: "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".into(),
             code: auth_code,
             grant_type: "authorization_code".into(),
-            redirect_uri: "http://localhost:8085/oauth2callback".into(),
+            redirect_uri: "http://localhost:51121/oauth2callback".into(),
         })
         .send()
         .await
@@ -225,9 +225,9 @@ async fn execute_model_prompt(app: AppHandle, token: String, model: String, prom
     let client = reqwest::Client::new();
     let res = client.post("https://cloudcode-pa.googleapis.com/v1internal:streamGenerateContent?alt=sse")
         .bearer_auth(&token)
-        .header("User-Agent", "antigravity/1.18.3 windows/amd64")
+        .header("User-Agent", "google-api-nodejs-client/9.15.1")
         .header("X-Goog-Api-Client", "google-cloud-sdk vscode_cloudshelleditor/0.1")
-        .header("Client-Metadata", r#"{"ideType":"ANTIGRAVITY","platform":"WINDOWS","pluginType":"GEMINI"}"#)
+        .header("Client-Metadata", r#"{"ideType":"IDE_UNSPECIFIED","platform":"PLATFORM_UNSPECIFIED","pluginType":"GEMINI"}"#)
         .header("Content-Type", "application/json")
         .json(&payload)
         .send()
