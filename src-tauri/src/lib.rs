@@ -303,7 +303,7 @@ async fn fetch_project_id_internal(client: &Client, access_token: &str) -> Resul
 }
 
 
-// ── Token Refresh ──
+// ── Token Refresh (mengikuti pola server.cjs refreshAccessTokenSafe) ──
 #[tauri::command]
 async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
     let client = Client::new();
@@ -311,7 +311,7 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
     let res = client.post("https://oauth2.googleapis.com/token")
         .form(&[
             ("grant_type", "refresh_token"),
-            ("refresh_token", &refresh_token),
+            ("refresh_token", &refresh_token as &str),
             ("client_id", CLIENT_ID),
             ("client_secret", CLIENT_SECRET),
         ])
@@ -324,12 +324,9 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
         return Err(format!("Token refresh error: {}", err_text));
     }
 
-    let json: Value = res.json().await.map_err(|e| format!("Parse error: {}", e))?;
-    let new_token = json.get("access_token")
-        .and_then(|v| v.as_str())
-        .ok_or("No access_token in refresh response")?;
-
-    Ok(new_token.to_string())
+    // Return raw JSON dari Google (berisi access_token, expires_in, dll.)
+    let body = res.text().await.map_err(|e| format!("Read body error: {}", e))?;
+    Ok(body)
 }
 
 

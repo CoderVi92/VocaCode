@@ -36,49 +36,65 @@ export default function App() {
   const setSelectedModel = useAppStore((s) => s.setSelectedModel)
   const profileRef = useRef<HTMLDivElement>(null)
 
-  // Auto-login logic (Hydration persist run)
+  // Auto-login logic (Hydration persist run) — mengikuti pola server.cjs refreshAccessTokenSafe
   useEffect(() => {
     const initAuth = async () => {
+      // Tunggu Zustand rehydrate selesai (persist middleware async)
+      await new Promise(resolve => setTimeout(resolve, 100))
+      
       const store = useAppStore.getState()
       
-      // Jika oauthToken dan refreshToken ada (dari local storage Zustand persist)
-      if (store.oauthToken && store.refreshToken) {
+      // Jika refreshToken ada (dari localStorage Zustand persist), coba refresh
+      if (store.refreshToken) {
         try {
-          // Refresh access token via backend Tauri rust
-          const newAccessJson: string = await invoke('refresh_access_token', {
+          // Refresh access token via backend Tauri Rust
+          const rawJson: string = await invoke('refresh_access_token', {
             refreshToken: store.refreshToken
           })
-          const result = JSON.parse(newAccessJson)
+          const result = JSON.parse(rawJson)
           
           if (result.access_token) {
             useAppStore.setState({ 
               oauthToken: result.access_token,
               isAuthenticated: true 
             })
-            // Fetch kuota terbaru secara opsional
+            // Fetch kuota terbaru
             if (store.projectId) {
-               const models: any = await invoke('fetch_gemini_models_with_quota', {
-                 accessToken: result.access_token,
-                 projectId: store.projectId
-               })
-               useAppStore.setState({ aiModels: models })
+               try {
+                 const models: any = await invoke('fetch_gemini_models_with_quota', {
+                   accessToken: result.access_token,
+                   projectId: store.projectId
+                 })
+                 useAppStore.setState({ aiModels: models })
+                 if (models.length > 0 && !store.selectedModel) {
+                   useAppStore.setState({ selectedModel: models[0] })
+                 }
+               } catch (quotaErr) {
+                 console.warn("Kuota fetch gagal, pakai data lama:", quotaErr)
+               }
             }
-            // Langsung ke dashboard
+            // Langsung ke dashboard (skip login)
             navigate('explorer')
+            return
           }
         } catch (e) {
-           console.error("Auto login failed (refresh token expired/error): ", e)
-           // Bersihkan sesi jika gagal
-           useAppStore.setState({ isAuthenticated: false, oauthToken: null, refreshToken: null, projectId: null })
-           navigate('login')
+           console.error("Auto login gagal (refresh token expired): ", e)
+           // Bersihkan sesi jika refresh gagal
+           useAppStore.setState({ 
+             isAuthenticated: false, 
+             oauthToken: null, 
+             refreshToken: null, 
+             projectId: null,
+             aiModels: [],
+             selectedModel: null
+           })
         }
       }
+      // Jika tidak ada token atau refresh gagal, pastikan ke login
+      navigate('login')
     }
     
-    // Hanya periksa jika saat ini berada di halaman login (fresh start)
-    if (useAppStore.getState().currentPage === 'login') {
-      initAuth()
-    }
+    initAuth()
   }, [])
 
   // Model selector dropdown state
