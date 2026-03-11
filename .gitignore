@@ -22,3 +22,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+test-ui/
+
+ag-auth-sample/
+temp-opencode-ag-auth/

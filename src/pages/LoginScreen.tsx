@@ -17,7 +17,10 @@ export default function LoginScreen() {
                 project_id: string
             }
 
-            const models: AntigravityModel[] = await invoke('fetch_gemini_models')
+            const models: AntigravityModel[] = await invoke('fetch_gemini_models_with_quota', {
+                accessToken: loginResult.access_token,
+                projectId: loginResult.project_id
+            })
 
             const store = useAppStore.getState()
             store.setOauthToken(loginResult.access_token)

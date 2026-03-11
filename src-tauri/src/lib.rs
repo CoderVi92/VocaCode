@@ -346,12 +346,14 @@ struct AntigravityModel {
     #[serde(rename = "outputTokenLimit")]
     output_token_limit: u32,
     source: String,
+    #[serde(rename = "quotaPercent", skip_serializing_if = "Option::is_none")]
+    quota_percent: Option<u8>,
 }
 
 #[tauri::command]
-async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
+async fn fetch_gemini_models_with_quota(access_token: String, project_id: String) -> Result<Vec<AntigravityModel>, String> {
     // Model IDs match verified working models from opencode-ag-auth model-resolver.ts
-    let models = vec![
+    let mut models = vec![
         AntigravityModel {
             id: "gemini-3.1-pro-high".into(),
             name: "gemini-3.1-pro-high".into(),
@@ -360,6 +362,7 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
             source: "antigravity".into(),
+            quota_percent: None,
         },
         AntigravityModel {
             id: "gemini-3.1-pro-low".into(),
@@ -369,6 +372,7 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
             source: "antigravity".into(),
+            quota_percent: None,
         },
         AntigravityModel {
             id: "gemini-3-flash".into(),
@@ -378,6 +382,7 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
             input_token_limit: 1_048_576,
             output_token_limit: 65_536,
             source: "antigravity".into(),
+            quota_percent: None,
         },
         AntigravityModel {
             id: "claude-sonnet-4-6".into(),
@@ -387,6 +392,7 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
+            quota_percent: None,
         },
         AntigravityModel {
             id: "claude-opus-4-6-thinking".into(),
@@ -396,17 +402,50 @@ async fn fetch_gemini_models() -> Result<Vec<AntigravityModel>, String> {
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
-        },
-        AntigravityModel {
-            id: "gemini-2.5-pro".into(),
-            name: "gemini-2.5-pro".into(),
-            display_name: "Gemini 2.5 Pro".into(),
-            description: "Gemini 2.5 Pro via Gemini CLI quota".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_536,
-            source: "gemini-cli".into(),
+            quota_percent: None,
         },
     ];
+
+    // Fetch quota dari API
+    let client = Client::new();
+    let url = format!("{}/{}:fetchAvailableModels", ENDPOINT_PROD, API_VERSION);
+    let body = serde_json::json!({
+        "project": project_id
+    });
+
+    // Mengambil sisa kuota (Bypass panic, abaikan jika gagal, tetap return list kosong/awal)
+    if let Ok(res) = client.post(&url)
+        .bearer_auth(&access_token)
+        .header("Content-Type", "application/json")
+        .header("User-Agent", HEADER_UA_ANTIGRAVITY)
+        .json(&body)
+        .send()
+        .await
+    {
+        if res.status().is_success() {
+            if let Ok(json) = res.json::<Value>().await {
+                // Parsing field models
+                let models_obj = json.get("models").or_else(|| {
+                    json.get("response").and_then(|r| r.get("models"))
+                });
+
+                if let Some(obj) = models_obj.and_then(|m| m.as_object()) {
+                    for (key, val) in obj {
+                        // Merging dengan models array
+                        if let Some(model) = models.iter_mut().find(|m| m.id == *key) {
+                            if let Some(info) = val.get("quotaInfo") {
+                                if let Some(frac) = info.get("remainingFraction").and_then(|f| f.as_f64()) {
+                                    model.quota_percent = Some((frac * 100.0).round() as u8);
+                                } else {
+                                    model.quota_percent = Some(0);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     Ok(models)
 }
@@ -594,7 +633,7 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .invoke_handler(tauri::generate_handler![
             login_oauth_proxy,
-            fetch_gemini_models,
+            fetch_gemini_models_with_quota,
             execute_model_prompt,
             refresh_access_token
         ])

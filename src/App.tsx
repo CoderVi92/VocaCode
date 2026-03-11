@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'react'
 import { AnimatePresence, motion } from 'framer-motion'
+import { invoke } from '@tauri-apps/api/core'
 import {
   ChevronDown, LayoutGrid, Search, Monitor,
   Mail, CheckCircle2, Github, LogOut, Minus, Square, X,
@@ -33,7 +34,53 @@ export default function App() {
   const selectedModel = useAppStore((s) => s.selectedModel)
   const aiModels = useAppStore((s) => s.aiModels)
   const setSelectedModel = useAppStore((s) => s.setSelectedModel)
+  const setSelectedModel = useAppStore((s) => s.setSelectedModel)
   const profileRef = useRef<HTMLDivElement>(null)
+
+  // Auto-login logic (Hydration persist run)
+  useEffect(() => {
+    const initAuth = async () => {
+      const store = useAppStore.getState()
+      
+      // Jika oauthToken dan refreshToken ada (dari local storage Zustand persist)
+      if (store.oauthToken && store.refreshToken) {
+        try {
+          // Refresh access token via backend Tauri rust
+          const newAccessJson: string = await invoke('refresh_access_token', {
+            refreshToken: store.refreshToken
+          })
+          const result = JSON.parse(newAccessJson)
+          
+          if (result.access_token) {
+            useAppStore.setState({ 
+              oauthToken: result.access_token,
+              isAuthenticated: true 
+            })
+            // Fetch kuota terbaru secara opsional
+            if (store.projectId) {
+               const models: any = await invoke('fetch_gemini_models_with_quota', {
+                 accessToken: result.access_token,
+                 projectId: store.projectId
+               })
+               useAppStore.setState({ aiModels: models })
+            }
+            // Langsung ke dashboard
+            navigate('explorer')
+          }
+        } catch (e) {
+           console.error("Auto login failed (refresh token expired/error): ", e)
+           // Bersihkan sesi jika gagal
+           useAppStore.setState({ isAuthenticated: false, oauthToken: null, refreshToken: null, projectId: null })
+           navigate('login')
+        }
+      }
+    }
+    
+    // Hanya periksa jika saat ini berada di halaman login (fresh start)
+    if (useAppStore.getState().currentPage === 'login') {
+      initAuth()
+    }
+  }, [])
 
   // Model selector dropdown state
   const [isModelSelectorOpen, setModelSelectorOpen] = useState(false)
@@ -123,6 +170,7 @@ export default function App() {
                   <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
                     <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
                       {selectedModel?.displayName || 'Loading AI...'}
+                      {mode === 'BASIC' && selectedModel?.quotaPercent !== undefined ? ` | ${selectedModel.quotaPercent}%` : ''}
                     </span>
                     <ChevronDown size={11} className={`text-gray-500 transition-transform duration-200 ${isModelSelectorOpen ? 'rotate-180' : ''}`} />
                   </div>
@@ -152,7 +200,7 @@ export default function App() {
                         >
                           <div className="flex flex-col">
                             <span className={`text-[11px] font-bold ${selectedModel?.id === model.id ? 'text-indigo-300' : 'text-gray-300'}`}>
-                              {model.displayName}
+                              {model.displayName} {mode === 'BASIC' && model.quotaPercent !== undefined ? `| ${model.quotaPercent}%` : ''}
                             </span>
                             <span className="text-[9px] text-gray-600 mt-0.5">{model.description}</span>
                           </div>
@@ -242,7 +290,17 @@ export default function App() {
 
                     <div className="mt-2 pt-2 border-t border-white/5 px-2">
                       <button
-                        onClick={() => { setProfileOpen(false); navigate('login') }}
+                        onClick={() => { 
+                          setProfileOpen(false)
+                          useAppStore.setState({
+                             isAuthenticated: false,
+                             oauthToken: null,
+                             refreshToken: null,
+                             projectId: null,
+                             aiModels: []
+                          })
+                          navigate('login') 
+                        }}
                         className="w-full flex items-center gap-3 px-3 py-2 rounded-lg text-red-400 hover:bg-red-400/10 transition-colors text-[11px] font-bold"
                       >
                         <LogOut size={14} /> Keluar Sesi

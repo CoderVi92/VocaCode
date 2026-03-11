@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { persist } from 'zustand/middleware'
 
 export type AppPage =
     | 'login'
@@ -36,6 +37,7 @@ export interface AntigravityModel {
     inputTokenLimit: number
     outputTokenLimit: number
     source: string
+    quotaPercent?: number
 }
 
 interface AppState {
@@ -79,42 +81,57 @@ const defaultWizardData: WizardData = {
     outputType: 'static',
 }
 
-export const useAppStore = create<AppState>((set) => ({
-    currentPage: 'login',
-    mode: 'BASIC',
-    isAuthenticated: false,
-    isProfileOpen: false,
-    selectedTemplate: null,
-    filter: 'Semua',
-    templatePage: 0,
-    wizardData: { ...defaultWizardData },
-    aiModels: [],
-    selectedModel: null,
-    oauthToken: null,
-    projectId: null,
-    refreshToken: null,
+export const useAppStore = create<AppState>()(
+  persist(
+    (set) => ({
+      currentPage: 'login',
+      mode: 'BASIC',
+      isAuthenticated: false,
+      isProfileOpen: false,
+      selectedTemplate: null,
+      filter: 'Semua',
+      templatePage: 0,
+      wizardData: { ...defaultWizardData },
+      aiModels: [],
+      selectedModel: null,
+      oauthToken: null,
+      projectId: null,
+      refreshToken: null,
 
-    navigate: (page) => set({ currentPage: page }),
-    setMode: (mode) => set({ mode }),
-    setAuthenticated: (val) => set({ isAuthenticated: val }),
-    setProfileOpen: (val) => set({ isProfileOpen: val }),
-    setSelectedTemplate: (t) => set({ selectedTemplate: t }),
-    setFilter: (filter) => set({ filter, templatePage: 0 }),
-    setTemplatePage: (page) => set({ templatePage: page }),
-    updateWizardData: (data) =>
-        set((state) => ({ wizardData: { ...state.wizardData, ...data } })),
-    toggleWizardPage: (page) =>
-        set((state) => ({
-            wizardData: {
-                ...state.wizardData,
-                pages: state.wizardData.pages.includes(page)
-                    ? state.wizardData.pages.filter((p) => p !== page)
-                    : [...state.wizardData.pages, page],
-            },
-        })),
-    setAiModels: (models) => set({ aiModels: models }),
-    setSelectedModel: (model) => set({ selectedModel: model }),
-    setOauthToken: (token) => set({ oauthToken: token }),
-    setProjectId: (id) => set({ projectId: id }),
-    setRefreshToken: (token) => set({ refreshToken: token }),
-}))
+      navigate: (page) => set({ currentPage: page }),
+      setMode: (mode) => set({ mode }),
+      setAuthenticated: (val) => set({ isAuthenticated: val }),
+      setProfileOpen: (val) => set({ isProfileOpen: val }),
+      setSelectedTemplate: (t) => set({ selectedTemplate: t }),
+      setFilter: (filter) => set({ filter, templatePage: 0 }),
+      setTemplatePage: (page) => set({ templatePage: page }),
+      updateWizardData: (data) =>
+          set((state) => ({ wizardData: { ...state.wizardData, ...data } })),
+      toggleWizardPage: (page) =>
+          set((state) => ({
+              wizardData: {
+                  ...state.wizardData,
+                  pages: state.wizardData.pages.includes(page)
+                      ? state.wizardData.pages.filter((p) => p !== page)
+                      : [...state.wizardData.pages, page],
+              },
+          })),
+      setAiModels: (models) => set({ aiModels: models }),
+      setSelectedModel: (model) => set({ selectedModel: model }),
+      setOauthToken: (token) => set({ oauthToken: token }),
+      setProjectId: (id) => set({ projectId: id }),
+      setRefreshToken: (token) => set({ refreshToken: token }),
+    }),
+    {
+      name: 'vocacode-auth-storage',
+      partialize: (state) => ({
+        oauthToken: state.oauthToken,
+        refreshToken: state.refreshToken,
+        projectId: state.projectId,
+        aiModels: state.aiModels,
+        selectedModel: state.selectedModel,
+        isAuthenticated: state.isAuthenticated
+      }),
+    }
+  )
+)
