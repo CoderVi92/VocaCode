@@ -34,7 +34,6 @@ export default function App() {
   const selectedModel = useAppStore((s) => s.selectedModel)
   const aiModels = useAppStore((s) => s.aiModels)
   const setSelectedModel = useAppStore((s) => s.setSelectedModel)
-  const setSelectedModel = useAppStore((s) => s.setSelectedModel)
   const profileRef = useRef<HTMLDivElement>(null)
 
   // Auto-login logic (Hydration persist run)
