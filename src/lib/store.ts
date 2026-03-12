@@ -92,12 +92,36 @@ const defaultWizardData: WizardData = {
     outputType: 'static',
 }
 
+import { logger } from './logger'
+
+// Middleware sederhana untuk mencatat aktivitas ke Desktop log via Rust
+const logMiddleware = (config: any) => (set: any, get: any, api: any) =>
+  config(
+    (args: any) => {
+      const prevState = get();
+      set(args);
+      const newState = get();
+      
+      // Cari perbedaan state untuk dilog (sangat mendetail sesuai permintaan user)
+      Object.keys(newState).forEach(key => {
+        if (prevState[key] !== newState[key] && typeof newState[key] !== 'function') {
+          const val = newState[key];
+          const valStr = typeof val === 'object' ? JSON.stringify(val) : val;
+          logger.info("STATE-CHANGE", key, `Berubah menjadi: ${valStr}`);
+        }
+      });
+    },
+    get,
+    api
+  );
+
 export const useAppStore = create<AppState>()(
-  persist(
-    (set) => ({
-      currentPage: 'login',
-      mode: 'BASIC',
-      isAuthenticated: false,
+  logMiddleware(
+    persist(
+      (set, get) => ({
+        currentPage: 'login',
+        mode: 'BASIC',
+        isAuthenticated: false,
       isProfileOpen: false,
       selectedTemplate: null,
       filter: 'Semua',
@@ -150,5 +174,6 @@ export const useAppStore = create<AppState>()(
         userEmail: state.userEmail,
       }),
     }
-  )
+  ) as any)
 )
+

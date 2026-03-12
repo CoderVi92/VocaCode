@@ -7,6 +7,7 @@ import {
   Link2, Zap
 } from 'lucide-react'
 import { useAppStore } from './lib/store'
+import { logger } from './lib/logger'
 import LoginScreen from './pages/LoginScreen'
 import LoadingScreen from './pages/LoadingScreen'
 import ExplorerScreen from './pages/ExplorerScreen'
@@ -33,19 +34,52 @@ const HEADER_PAGES = ['explorer', 'wizard1', 'wizard2', 'wizard3', 'final_previe
 const FOOTER_PAGES = ['explorer', 'wizard1', 'wizard2', 'wizard3', 'final_preview']
 
 export default function App() {
-  const currentPage = useAppStore((s) => s.currentPage)
-  const mode = useAppStore((s) => s.mode)
-  const setMode = useAppStore((s) => s.setMode)
-  const isProfileOpen = useAppStore((s) => s.isProfileOpen)
-  const setProfileOpen = useAppStore((s) => s.setProfileOpen)
-  const navigate = useAppStore((s) => s.navigate)
-  const selectedModel = useAppStore((s) => s.selectedModel)
-  const aiModels = useAppStore((s) => s.aiModels)
-  const setSelectedModel = useAppStore((s) => s.setSelectedModel)
-  const userName = useAppStore((s) => s.userName)
-  const userEmail = useAppStore((s) => s.userEmail)
+  const currentPage = useAppStore((s: any) => s.currentPage)
+  const mode = useAppStore((s: any) => s.mode)
+  const setMode = useAppStore((s: any) => s.setMode)
+  const isProfileOpen = useAppStore((s: any) => s.isProfileOpen)
+  const setProfileOpen = useAppStore((s: any) => s.setProfileOpen)
+  const navigate = useAppStore((s: any) => s.navigate)
+  const selectedModel = useAppStore((s: any) => s.selectedModel)
+  const aiModels = useAppStore((s: any) => s.aiModels)
+  const setSelectedModel = useAppStore((s: any) => s.setSelectedModel)
+  const userName = useAppStore((s: any) => s.userName)
+  const userEmail = useAppStore((s: any) => s.userEmail)
   const profileRef = useRef<HTMLDivElement>(null)
   const [appVersion, setAppVersion] = useState('...')
+
+  // Full Telemetry: Global Click Listener
+  useEffect(() => {
+    const handleGlobalClick = (e: MouseEvent) => {
+      const target = e.target as HTMLElement;
+      const text = target.innerText?.substring(0, 30) || target.tagName;
+      const id = target.id ? ` (#${target.id})` : "";
+      const className = target.className ? ` (.${String(target.className).substring(0, 20)})` : "";
+      
+      logger.ui("Mouse Click", `User clicked on: <${target.tagName.toLowerCase()}> "${text}"${id}${className}`);
+    };
+
+    window.addEventListener('mousedown', handleGlobalClick);
+    return () => window.removeEventListener('mousedown', handleGlobalClick);
+  }, []);
+
+  // Full Telemetry: Window Event Listeners
+  useEffect(() => {
+    if (!appWindow) return;
+
+    const unlistenBlur = appWindow.onFocusChanged(({ payload: focused }: { payload: boolean }) => {
+       logger.ui("Window Focus Changed", `Window is now ${focused ? 'Focused' : 'Blurred/Minimized'}`);
+    });
+
+    const unlistenResize = appWindow.onResized(() => {
+       logger.ui("Window Resized", "User adjusted window size");
+    });
+
+    return () => {
+      unlistenBlur.then((fn: any) => fn());
+      unlistenResize.then((fn: any) => fn());
+    };
+  }, []);
 
   // Fetch app version from Tauri
   useEffect(() => {
@@ -104,7 +138,7 @@ export default function App() {
                    useAppStore.setState({ selectedModel: models[0] })
                  }
                } catch (quotaErr) {
-                 console.warn("Kuota fetch gagal, pakai data lama:", quotaErr)
+                 logger.error("AUTH-INIT", "Fetch Quota Failed", quotaErr);
                }
             }
             // Langsung ke dashboard (skip login)
