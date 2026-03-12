@@ -532,43 +532,13 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
         project_id
     };
 
-    // Parsing model thinking tier (seperti gemini-3-flash-high)
-    let mut actual_model = model.clone();
-    let mut thinking_config = None;
-
-    if model.starts_with("gemini-3-flash-") {
-        actual_model = "gemini-3-flash".to_string();
-        let tier = model.strip_prefix("gemini-3-flash-").unwrap_or("minimal");
-        // Antigravity API for Gemini 3 Flash expects string level: "minimal", "low", "medium", "high"
-        thinking_config = Some(serde_json::json!({
-            "includeThoughts": true,
-            "thinkingLevel": tier
-        }));
-    } else if model.starts_with("gemini-3.1-pro-") {
-        actual_model = "gemini-3.1-pro-preview".to_string(); // Sesuai referensi legacy fallbacks
-        let tier = model.strip_prefix("gemini-3.1-pro-").unwrap_or("low");
-        thinking_config = Some(serde_json::json!({
-            "includeThoughts": true,
-            "thinkingLevel": tier
-        }));
-    }
-
-    // Body persis seperti server.cjs chatWithModel
-    let mut request_payload = serde_json::json!({
-        "contents": [{ "role": "user", "parts": [{ "text": prompt }] }]
-    });
-
-    if let Some(tc) = thinking_config {
-        request_payload.as_object_mut().unwrap().insert(
-            "generationConfig".to_string(),
-            serde_json::json!({ "thinkingConfig": tc })
-        );
-    }
-
+    // Body persis seperti server.cjs chatWithModel (tanpa properti thinkingConfig, biarkan API server-side parse -high otomatis)
     let payload = serde_json::json!({
         "project": effective_project,
-        "model": actual_model,
-        "request": request_payload
+        "model": model,
+        "request": {
+            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }]
+        }
     });
 
     // Endpoint fallback: daily → autopush → prod (matching server.cjs CHAT_ENDPOINTS)
@@ -582,9 +552,11 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
         let mut last_err = String::from("Semua endpoint gagal.");
         let mut should_retry = false;
         let mut retry_status: u16 = 0;
+        let mut success = false;
+        let mut response_data: Option<Value> = None;
 
         for endpoint in &chat_endpoints {
-            // URL: /v1internal:generateContent (NON-STREAMING, persis server.cjs baris 390)
+            // URL: /v1internal:generateContent (NON-STREAMING)
             let url = format!("{}/{}:generateContent", endpoint, API_VERSION);
 
             let res = match client.post(&url)
@@ -604,61 +576,61 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
                 };
 
             let status = res.status().as_u16();
-
-            if !res.status().is_success() {
-                let err_text = res.text().await.unwrap_or_default();
-
-                // Pesan error ramah berdasarkan status code
-                last_err = match status {
-                    401 => "Token autentikasi sudah kedaluwarsa. Silakan login ulang.".to_string(),
-                    403 => "Akses ditolak. Silakan login ulang atau periksa izin akun Anda.".to_string(),
-                    429 => format!("Batas permintaan tercapai untuk model {}. Menunggu sebelum mencoba lagi...", model),
-                    503 => {
-                        // Cek apakah error MODEL_CAPACITY_EXHAUSTED
-                        if err_text.contains("MODEL_CAPACITY_EXHAUSTED") || err_text.contains("No capacity available") {
-                            format!("Model {} sedang penuh (kapasitas habis). Mencoba ulang...", model)
-                        } else {
-                            format!("Server sedang sibuk. Mencoba ulang...")
-                        }
-                    },
-                    404 => {
-                        // Wrong endpoint, try next silently
-                        continue;
-                    },
-                    _ => {
-                        // Check for quota exhausted in response body
-                        if err_text.contains("RESOURCE_EXHAUSTED") || err_text.contains("quota") {
-                            format!("Kuota untuk model {} sudah habis. Coba gunakan model lain.", model)
-                        } else {
-                            format!("Error API ({}): {}", status, if err_text.len() > 200 { &err_text[..200] } else { &err_text })
-                        }
-                    }
-                };
-
-                // 429 dan 503 bisa di-retry (matching server.cjs baris 471)
-                if (status == 429 || status == 503) && attempt < max_retries {
-                    should_retry = true;
-                    retry_status = status;
-                    break; // keluar dari endpoint loop, masuk retry
+            
+            if res.status().is_success() {
+                let raw_text = res.text().await.unwrap_or_default();
+                if let Ok(data) = serde_json::from_str::<Value>(&raw_text) {
+                    response_data = Some(data);
+                    success = true;
+                    break;
+                } else {
+                    last_err = "Gagal parsing respons JSON yang valid".to_string();
+                    continue;
                 }
-
-                let _ = app.emit("ai_error", &last_err);
-                return Err(last_err);
             }
 
-            // Non-streaming: baca seluruh JSON response sekaligus (persis server.cjs baris 415-452)
-            let raw_text = res.text().await.unwrap_or_default();
+            // Jika GAGAL pada endpoint ini:
+            let err_text = res.text().await.unwrap_or_default();
+            last_err = match status {
+                401 => "Token autentikasi sudah kedaluwarsa. Silakan login ulang.".to_string(),
+                403 => "Akses ditolak. Silakan login ulang atau periksa izin akun Anda.".to_string(),
+                429 => format!("Batas permintaan tercapai untuk model {}. Menunggu sebelum mencoba lagi...", model),
+                503 => {
+                    if err_text.contains("MODEL_CAPACITY_EXHAUSTED") || err_text.contains("No capacity available") {
+                        format!("Model {} sedang penuh (kapasitas habis). Mencoba ulang...", model)
+                    } else {
+                        format!("Server sedang sibuk. Mencoba ulang...")
+                    }
+                },
+                _ => {
+                    if err_text.contains("RESOURCE_EXHAUSTED") || err_text.contains("quota") {
+                        format!("Kuota untuk model {} sudah habis. Coba gunakan model lain.", model)
+                    } else {
+                        format!("Error API ({}): {}", status, if err_text.len() > 200 { &err_text[..200] } else { &err_text })
+                    }
+                }
+            };
 
-            if let Ok(data) = serde_json::from_str::<Value>(&raw_text) {
-                // Check for API-level error
+            // 429 dan 503 memicu delay dan percobaan berulang pada loop utama (mirip server.cjs baris 471)
+            // Error HTTP lain seperti 403 atau 404 maka kita lanjut iterasi endpoint berikutnya
+            if status == 429 || status == 503 {
+                if attempt < max_retries {
+                    should_retry = true;
+                    retry_status = status;
+                }
+                break; // Hentikan fallback endpoint, persiapkan retry backoff timer 
+            }
+        } // akhir dari loop fallback endpoint
+
+        // Jika salah satu endpoint pada loop di atas berhasil:
+        if success {
+            if let Some(data) = response_data {
+                // Check API-level error JSON
                 if let Some(err) = data.get("error") {
                     let err_code = err.get("code").and_then(|c| c.as_u64()).unwrap_or(0);
                     let err_status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
-                    let raw_msg = err.get("message")
-                        .and_then(|m| m.as_str())
-                        .unwrap_or("Error tidak diketahui dari API");
+                    let raw_msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Error tidak diketahui dari API");
 
-                    // Terjemahkan error ke pesan ramah
                     let friendly_msg = if err_status == "RESOURCE_EXHAUSTED" || raw_msg.contains("quota") {
                         format!("Kuota untuk model {} sudah habis. Coba gunakan model lain.", model)
                     } else if err_code == 503 || raw_msg.contains("No capacity") {
@@ -673,22 +645,14 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
                     return Err(friendly_msg);
                 }
 
-                // Response bisa ter-wrap: { response: { candidates: [...] } }
-                // atau langsung: { candidates: [...] }
-                // (matching server.cjs baris 425)
-                let candidates = data.get("candidates")
-                    .or_else(|| data.pointer("/response/candidates"));
-
+                let candidates = data.get("candidates").or_else(|| data.pointer("/response/candidates"));
                 let mut text = String::new();
 
                 if let Some(cands) = candidates.and_then(|c| c.as_array()) {
                     if let Some(first) = cands.first() {
                         if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
-                            // Cari text dari parts, skip thinking parts (matching server.cjs baris 430-431)
                             for part in parts {
-                                let is_thought = part.get("thought")
-                                    .and_then(|t| t.as_bool())
-                                    .unwrap_or(false);
+                                let is_thought = part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false);
                                 if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
                                     if !t.is_empty() && !is_thought {
                                         text = t.to_string();
@@ -696,7 +660,6 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
                                     }
                                 }
                             }
-                            // Fallback: ambil text dari part pertama apapun (matching server.cjs baris 438-440)
                             if text.is_empty() {
                                 if let Some(first_part) = parts.first() {
                                     if let Some(t) = first_part.get("text").and_then(|t| t.as_str()) {
@@ -713,11 +676,6 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
                 }
 
                 let _ = app.emit("ai_chunk", text.as_str());
-                let _ = app.emit("ai_complete", ());
-                return Ok(());
-            } else {
-                // Response bukan JSON valid — emit sebagai raw text
-                let _ = app.emit("ai_chunk", raw_text.as_str());
                 let _ = app.emit("ai_complete", ());
                 return Ok(());
             }
