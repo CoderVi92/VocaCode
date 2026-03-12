@@ -54,6 +54,8 @@ interface AppState {
     oauthToken: string | null
     projectId: string | null
     refreshToken: string | null
+    userName: string | null
+    userEmail: string | null
 
     // Actions
     navigate: (page: AppPage) => void
@@ -70,6 +72,8 @@ interface AppState {
     setOauthToken: (token: string) => void
     setProjectId: (id: string) => void
     setRefreshToken: (token: string) => void
+    setUserName: (name: string) => void
+    setUserEmail: (email: string) => void
 }
 
 const defaultWizardData: WizardData = {
@@ -97,6 +101,8 @@ export const useAppStore = create<AppState>()(
       oauthToken: null,
       projectId: null,
       refreshToken: null,
+      userName: null,
+      userEmail: null,
 
       navigate: (page) => set({ currentPage: page }),
       setMode: (mode) => set({ mode }),
@@ -121,6 +127,8 @@ export const useAppStore = create<AppState>()(
       setOauthToken: (token) => set({ oauthToken: token }),
       setProjectId: (id) => set({ projectId: id }),
       setRefreshToken: (token) => set({ refreshToken: token }),
+      setUserName: (name) => set({ userName: name }),
+      setUserEmail: (email) => set({ userEmail: email }),
     }),
     {
       name: 'vocacode-auth-storage',
@@ -130,7 +138,9 @@ export const useAppStore = create<AppState>()(
         projectId: state.projectId,
         aiModels: state.aiModels,
         selectedModel: state.selectedModel,
-        isAuthenticated: state.isAuthenticated
+        isAuthenticated: state.isAuthenticated,
+        userName: state.userName,
+        userEmail: state.userEmail,
       }),
     }
   )

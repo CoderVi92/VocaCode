@@ -31,6 +31,20 @@ export default function LoginScreen() {
                 store.setSelectedModel(models[0])
             }
 
+            // Fetch user info dari Google (nama + email)
+            try {
+                const userRes = await fetch('https://www.googleapis.com/oauth2/v1/userinfo?alt=json', {
+                    headers: { Authorization: `Bearer ${loginResult.access_token}` }
+                })
+                if (userRes.ok) {
+                    const user = await userRes.json()
+                    if (user.name) store.setUserName(user.name)
+                    if (user.email) store.setUserEmail(user.email)
+                }
+            } catch (e) {
+                console.warn('Failed to fetch user info:', e)
+            }
+
             store.setAuthenticated(true)
             store.navigate('explorer')
         } catch (err) {

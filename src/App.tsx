@@ -34,6 +34,8 @@ export default function App() {
   const selectedModel = useAppStore((s) => s.selectedModel)
   const aiModels = useAppStore((s) => s.aiModels)
   const setSelectedModel = useAppStore((s) => s.setSelectedModel)
+  const userName = useAppStore((s) => s.userName)
+  const userEmail = useAppStore((s) => s.userEmail)
   const profileRef = useRef<HTMLDivElement>(null)
 
   // Auto-login logic (Hydration persist run) — mengikuti pola server.cjs refreshAccessTokenSafe
@@ -132,11 +134,13 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0b0d11] text-gray-300 font-sans flex flex-col select-none overflow-hidden relative">
 
-      {/* Drag Region — invisible bar across top of window for dragging */}
-      <div 
-        className="absolute top-0 left-0 right-0 h-10 z-[90]" 
-        data-tauri-drag-region 
-      />
+      {/* Drag Region — hanya tampil saat TIDAK ada header (login/wizard) */}
+      {!showHeader && (
+        <div 
+          className="absolute top-0 left-0 right-0 h-10 z-[90]" 
+          data-tauri-drag-region 
+        />
+      )}
 
       {/* Window Controls — top-right, Windows style */}
       <div className="absolute top-0 right-0 p-2 flex items-center gap-0.5 z-[100]">
@@ -266,7 +270,7 @@ export default function App() {
                 onClick={() => setProfileOpen(!isProfileOpen)}
                 className="w-6 h-6 bg-teal-600 rounded-full flex items-center justify-center text-[10px] font-bold text-white hover:ring-2 ring-indigo-500/50 transition-all active:scale-90 relative"
               >
-                J
+                {(userName || 'U').charAt(0).toUpperCase()}
                 <div className="absolute -bottom-0.5 -right-0.5 w-2 h-2 bg-green-500 border border-[#11141b] rounded-full" />
               </button>
 
@@ -283,17 +287,17 @@ export default function App() {
                     <div className="px-4 pb-3 border-b border-white/5 mb-2">
                       <p className="text-[10px] font-bold text-gray-500 uppercase tracking-widest mb-1">Akun Terhubung</p>
                       <div className="flex items-center gap-2 mt-2">
-                        <div className="w-8 h-8 rounded-full bg-teal-600 flex items-center justify-center font-bold text-white text-xs">J</div>
+                        <div className="w-8 h-8 rounded-full bg-teal-600 flex items-center justify-center font-bold text-white text-xs">{(userName || 'U').charAt(0).toUpperCase()}</div>
                         <div>
-                          <p className="text-xs font-bold text-white">Jaka Sembung</p>
-                          <p className="text-[10px] text-gray-500">Pro Member</p>
+                          <p className="text-xs font-bold text-white">{userName || 'Pengguna'}</p>
+                          <p className="text-[10px] text-gray-500">Free Member</p>
                         </div>
                       </div>
                     </div>
 
                     <div className="px-2 space-y-1">
                       {[
-                        { icon: Mail, label: 'Google OAuth', sub: 'jaka.dev@gmail.com' },
+                        { icon: Mail, label: 'Google OAuth', sub: userEmail || 'Belum terhubung' },
                         { icon: Github, label: 'GitHub Proxy', sub: '@jakadeveloper' },
                       ].map(({ icon: Icon, label, sub }) => (
                         <div key={label} className="flex items-center justify-between px-3 py-2 rounded-lg hover:bg-white/5 transition-colors cursor-default">
@@ -315,10 +319,12 @@ export default function App() {
                           setProfileOpen(false)
                           useAppStore.setState({
                              isAuthenticated: false,
-                             oauthToken: null,
+                           oauthToken: null,
                              refreshToken: null,
                              projectId: null,
-                             aiModels: []
+                             aiModels: [],
+                             userName: null,
+                             userEmail: null,
                           })
                           navigate('login') 
                         }}

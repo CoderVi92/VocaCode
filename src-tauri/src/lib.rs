@@ -3,8 +3,6 @@ use tiny_http::{Server, Response, Header};
 use reqwest::Client;
 use tauri::{AppHandle, Emitter};
 use serde::{Deserialize, Serialize};
-use futures_util::StreamExt;
-use eventsource_stream::Eventsource;
 use serde_json::Value;
 
 // ── OAuth Constants ──
@@ -24,7 +22,7 @@ const DEFAULT_PROJECT_ID: &str = "rising-fact-p41fc";
 
 // ── Headers ──
 const HEADER_UA_GEMINI_CLI: &str = "google-api-nodejs-client/9.15.1";
-const HEADER_UA_ANTIGRAVITY: &str = "antigravity/1.18.3 windows/amd64";
+const HEADER_UA_ANTIGRAVITY: &str = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Antigravity/1.18.3 Chrome/138.0.7204.235 Electron/37.3.1 Safari/537.36";
 const HEADER_X_GOOG_API_CLIENT: &str = "google-cloud-sdk vscode_cloudshelleditor/0.1";
 
 fn client_metadata() -> String {
@@ -157,13 +155,9 @@ async fn fetch_project_id_internal(client: &Client, access_token: &str) -> Resul
     // Try loadCodeAssist across all endpoints (prod first)
     let load_endpoints = [ENDPOINT_PROD, ENDPOINT_DAILY, ENDPOINT_AUTOPUSH];
 
-    let body = serde_json::json!({
-        "metadata": {
-            "ideType": "ANTIGRAVITY",
-            "platform": "WINDOWS",
-            "pluginType": "GEMINI"
-        }
-    });
+    // Body kosong — metadata dikirim via header Client-Metadata
+    // (server.cjs: "API menolak string enum di body JSON")
+    let body = serde_json::json!({});
 
     let mut last_response_json: Option<Value> = None;
 
@@ -350,21 +344,12 @@ struct AntigravityModel {
 #[tauri::command]
 async fn fetch_gemini_models_with_quota(access_token: String, project_id: String) -> Result<Vec<AntigravityModel>, String> {
     // Model IDs match verified working models from opencode-ag-auth model-resolver.ts
+    // Model list synced 100% dengan server.cjs MODELS array
     let mut models = vec![
-        AntigravityModel {
-            id: "gemini-3.1-pro-high".into(),
-            name: "gemini-3.1-pro-high".into(),
-            display_name: "Gemini 3.1 Pro (High)".into(),
-            description: "Gemini 3.1 Pro with high thinking budget".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_535,
-            source: "antigravity".into(),
-            quota_percent: None,
-        },
         AntigravityModel {
             id: "gemini-3.1-pro-low".into(),
             name: "gemini-3.1-pro-low".into(),
-            display_name: "Gemini 3.1 Pro (Low)".into(),
+            display_name: "Gemini 3.1 Pro (Low Thinking)".into(),
             description: "Gemini 3.1 Pro with low thinking budget".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
@@ -372,10 +357,50 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             quota_percent: None,
         },
         AntigravityModel {
-            id: "gemini-3-flash".into(),
-            name: "gemini-3-flash".into(),
-            display_name: "Gemini 3 Flash".into(),
-            description: "Gemini 3 Flash — fast and lightweight".into(),
+            id: "gemini-3.1-pro-high".into(),
+            name: "gemini-3.1-pro-high".into(),
+            display_name: "Gemini 3.1 Pro (High Thinking)".into(),
+            description: "Gemini 3.1 Pro with high thinking budget".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_535,
+            source: "antigravity".into(),
+            quota_percent: None,
+        },
+        AntigravityModel {
+            id: "gemini-3-flash-minimal".into(),
+            name: "gemini-3-flash-minimal".into(),
+            display_name: "Gemini 3 Flash (Minimal Thinking)".into(),
+            description: "Gemini 3 Flash with minimal thinking".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_536,
+            source: "antigravity".into(),
+            quota_percent: None,
+        },
+        AntigravityModel {
+            id: "gemini-3-flash-low".into(),
+            name: "gemini-3-flash-low".into(),
+            display_name: "Gemini 3 Flash (Low Thinking)".into(),
+            description: "Gemini 3 Flash with low thinking".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_536,
+            source: "antigravity".into(),
+            quota_percent: None,
+        },
+        AntigravityModel {
+            id: "gemini-3-flash-medium".into(),
+            name: "gemini-3-flash-medium".into(),
+            display_name: "Gemini 3 Flash (Medium Thinking)".into(),
+            description: "Gemini 3 Flash with medium thinking".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_536,
+            source: "antigravity".into(),
+            quota_percent: None,
+        },
+        AntigravityModel {
+            id: "gemini-3-flash-high".into(),
+            name: "gemini-3-flash-high".into(),
+            display_name: "Gemini 3 Flash (High Thinking)".into(),
+            description: "Gemini 3 Flash with high thinking".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_536,
             source: "antigravity".into(),
@@ -384,7 +409,7 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
         AntigravityModel {
             id: "claude-sonnet-4-6".into(),
             name: "claude-sonnet-4-6".into(),
-            display_name: "Claude Sonnet 4.6".into(),
+            display_name: "Claude Sonnet 4.6 (Non-Thinking)".into(),
             description: "Claude Sonnet 4.6 via Antigravity".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
@@ -392,10 +417,20 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             quota_percent: None,
         },
         AntigravityModel {
-            id: "claude-opus-4-6-thinking".into(),
-            name: "claude-opus-4-6-thinking".into(),
-            display_name: "Claude Opus 4.6 (Thinking)".into(),
-            description: "Claude Opus 4.6 with extended thinking".into(),
+            id: "claude-sonnet-4-6-thinking-max".into(),
+            name: "claude-sonnet-4-6-thinking-max".into(),
+            display_name: "Claude Sonnet 4.6 (Max Thinking)".into(),
+            description: "Claude Sonnet 4.6 with max thinking".into(),
+            input_token_limit: 200_000,
+            output_token_limit: 64_000,
+            source: "antigravity".into(),
+            quota_percent: None,
+        },
+        AntigravityModel {
+            id: "claude-opus-4-6-thinking-max".into(),
+            name: "claude-opus-4-6-thinking-max".into(),
+            display_name: "Claude Opus 4.6 (Max Thinking)".into(),
+            description: "Claude Opus 4.6 with max thinking".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
@@ -448,82 +483,37 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
 }
 
 
-// ── Execute Model Prompt with Endpoint Fallback ──
+// ── Execute Model Prompt — Non-streaming (matching server.cjs chatWithModel) ──
 #[tauri::command]
 async fn execute_model_prompt(app: AppHandle, token: String, project_id: String, model: String, prompt: String) -> Result<(), String> {
-    // Use project_id or fallback to default
     let effective_project = if project_id.trim().is_empty() {
         DEFAULT_PROJECT_ID.to_string()
     } else {
         project_id
     };
 
-    // Build thinking config based on model family
-    // Gemini 3.x uses thinkingLevel (string), Claude/Gemini 2.5 uses thinkingBudget (numeric)
-    let thinking_config = if model.contains("claude") {
-        // Claude models: use thinkingBudget (numeric)
-        serde_json::json!({
-            "thinkingBudget": 16384,
-            "includeThoughts": true
-        })
-    } else if model.starts_with("gemini-2.5") {
-        // Gemini 2.5: use thinkingBudget (numeric)
-        serde_json::json!({
-            "thinkingBudget": 8192,
-            "includeThoughts": true
-        })
-    } else {
-        // Gemini 3.x: thinkingLevel is embedded in model name (e.g. gemini-3.1-pro-high)
-        // No separate thinkingConfig needed — the API infers from model suffix
-        serde_json::json!({})
-    };
-
-    // Build generation config
-    let generation_config = if thinking_config.as_object().map_or(true, |o| o.is_empty()) {
-        serde_json::json!({
-            "maxOutputTokens": 65535
-        })
-    } else {
-        serde_json::json!({
-            "maxOutputTokens": 65535,
-            "thinkingConfig": thinking_config
-        })
-    };
-
-    // Generate stable sessionId
-    let session_id = format!("-{}", {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        prompt.hash(&mut hasher);
-        hasher.finish() & 0x7FFFFFFFFFFFFFFF
-    });
-
+    // Body persis seperti server.cjs chatWithModel (baris 395-401)
     let payload = serde_json::json!({
         "project": effective_project,
         "model": model,
         "request": {
-            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }],
-            "generationConfig": generation_config,
-            "sessionId": session_id
-        },
-        "requestType": "agent",
-        "userAgent": "antigravity",
-        "requestId": format!("agent-{}", uuid::Uuid::new_v4())
+            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }]
+        }
     });
 
-    // Try endpoints in fallback order: daily → prod (matching opencode-ag-auth ENDPOINT_FALLBACKS)
-    let stream_endpoints = [ENDPOINT_DAILY, ENDPOINT_PROD];
+    // Endpoint fallback: daily → autopush → prod (matching server.cjs CHAT_ENDPOINTS)
+    let chat_endpoints = [ENDPOINT_DAILY, ENDPOINT_AUTOPUSH, ENDPOINT_PROD];
     let client = reqwest::Client::new();
-
     let mut last_err = String::from("All endpoints failed");
 
-    for endpoint in &stream_endpoints {
-        let url = format!("{}/{}:streamGenerateContent?alt=sse", endpoint, API_VERSION);
+    for endpoint in &chat_endpoints {
+        // URL: /v1internal:generateContent (NON-STREAMING, persis server.cjs baris 390)
+        let url = format!("{}/{}:generateContent", endpoint, API_VERSION);
 
         let res = match client.post(&url)
             .bearer_auth(&token)
-            .header("User-Agent", HEADER_UA_ANTIGRAVITY)
             .header("Content-Type", "application/json")
+            .header("User-Agent", HEADER_UA_ANTIGRAVITY)
             .header("X-Goog-Api-Client", HEADER_X_GOOG_API_CLIENT)
             .header("Client-Metadata", client_metadata())
             .json(&payload)
@@ -540,83 +530,74 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
             let status = res.status().as_u16();
             let err_text = res.text().await.unwrap_or_default();
             last_err = format!("API Error ({}): {}", status, err_text);
-            // 404 means wrong endpoint, try next
             if status == 404 {
-                continue;
+                continue; // Wrong endpoint, try next
             }
-            // Other errors (401, 403, 429, 500) — stop trying
             let _ = app.emit("ai_error", &last_err);
             return Err(last_err);
         }
 
-        // Success — stream the response
-        let mut stream = res.bytes_stream().eventsource();
-        let mut got_any_text = false;
-        
-        while let Some(event) = stream.next().await {
-            match event {
-                Ok(event) => {
-                    let data = event.data.clone();
-                    
-                    // Skip empty data or SSE keep-alive
-                    if data.is_empty() || data == "[DONE]" {
-                        continue;
-                    }
+        // Non-streaming: baca seluruh JSON response sekaligus (persis server.cjs baris 415-452)
+        let raw_text = res.text().await.unwrap_or_default();
 
-                    if let Ok(json) = serde_json::from_str::<Value>(&data) {
-                        // Check for API-level error in response
-                        if let Some(err) = json.get("error") {
-                            let err_msg = err.get("message")
-                                .and_then(|m| m.as_str())
-                                .unwrap_or("Unknown API error");
-                            let _ = app.emit("ai_error", err_msg);
-                            break;
-                        }
+        if let Ok(data) = serde_json::from_str::<Value>(&raw_text) {
+            // Check for API-level error
+            if let Some(err) = data.get("error") {
+                let err_msg = err.get("message")
+                    .and_then(|m| m.as_str())
+                    .unwrap_or("Unknown API error");
+                let _ = app.emit("ai_error", err_msg);
+                return Err(err_msg.to_string());
+            }
 
-                        if let Some(candidates) = json.get("candidates").and_then(|c| c.as_array()) {
-                            if let Some(first) = candidates.first() {
-                                if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
-                                    for part in parts {
-                                        // Skip thinking/thought blocks — only emit actual response text
-                                        let is_thought = part.get("thought")
-                                            .and_then(|t| t.as_bool())
-                                            .unwrap_or(false);
-                                        
-                                        if let Some(text_chunk) = part.get("text").and_then(|t| t.as_str()) {
-                                            if !text_chunk.is_empty() {
-                                                if is_thought {
-                                                    // Emit thinking content with prefix so UI can distinguish
-                                                    let _ = app.emit("ai_chunk", format!("[thinking] {}", text_chunk));
-                                                } else {
-                                                    let _ = app.emit("ai_chunk", text_chunk);
-                                                }
-                                                got_any_text = true;
-                                            }
-                                        }
-                                    }
+            // Response bisa ter-wrap: { response: { candidates: [...] } }
+            // atau langsung: { candidates: [...] }
+            // (matching server.cjs baris 425)
+            let candidates = data.get("candidates")
+                .or_else(|| data.pointer("/response/candidates"));
+
+            let mut text = String::new();
+
+            if let Some(cands) = candidates.and_then(|c| c.as_array()) {
+                if let Some(first) = cands.first() {
+                    if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
+                        // Cari text dari parts, skip thinking parts (matching server.cjs baris 430-431)
+                        for part in parts {
+                            let is_thought = part.get("thought")
+                                .and_then(|t| t.as_bool())
+                                .unwrap_or(false);
+                            if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                                if !t.is_empty() && !is_thought {
+                                    text = t.to_string();
+                                    break;
                                 }
                             }
                         }
-                    } else {
-                        // Not valid JSON — emit as raw text (some APIs return plain text chunks)
-                        if !data.trim().is_empty() {
-                            let _ = app.emit("ai_chunk", data.as_str());
-                            got_any_text = true;
+                        // Fallback: ambil text dari part pertama apapun (matching server.cjs baris 438-440)
+                        if text.is_empty() {
+                            if let Some(first_part) = parts.first() {
+                                if let Some(t) = first_part.get("text").and_then(|t| t.as_str()) {
+                                    text = t.to_string();
+                                }
+                            }
                         }
                     }
                 }
-                Err(e) => {
-                    let _ = app.emit("ai_error", e.to_string());
-                    break;
-                }
             }
+
+            if text.is_empty() {
+                text = "(Respon kosong — model tidak mengembalikan teks)".to_string();
+            }
+
+            let _ = app.emit("ai_chunk", text.as_str());
+            let _ = app.emit("ai_complete", ());
+            return Ok(());
+        } else {
+            // Response bukan JSON valid — emit sebagai raw text
+            let _ = app.emit("ai_chunk", raw_text.as_str());
+            let _ = app.emit("ai_complete", ());
+            return Ok(());
         }
-        
-        if !got_any_text {
-            let _ = app.emit("ai_chunk", "[No text content in response — model may have returned only thinking blocks or empty response]");
-        }
-        let _ = app.emit("ai_complete", ());
-        return Ok(());
     }
 
     // All endpoints failed
