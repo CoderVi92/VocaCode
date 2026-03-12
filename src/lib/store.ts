@@ -163,7 +163,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'vocacode-auth-storage',
-      partialize: (state: AppState) => ({
+      partialize: (state: AppState): any => ({
         oauthToken: state.oauthToken,
         refreshToken: state.refreshToken,
         projectId: state.projectId,
