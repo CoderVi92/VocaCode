@@ -29,6 +29,24 @@ fn client_metadata() -> String {
     r#"{"ideType":"ANTIGRAVITY","platform":"WINDOWS","pluginType":"GEMINI"}"#.to_string()
 }
 
+// ── Sistem Trace Logger ──
+#[tauri::command]
+fn write_debug_log(module: String, action: String, message: String) -> Result<(), String> {
+    use std::fs::OpenOptions;
+    use std::io::Write;
+    use chrono::Local;
+
+    let desktop_path = "C:\\Users\\Administrator\\Desktop\\vocacode-debug.log";
+    let now = Local::now().format("%Y-%m-%d %H:%M:%S").to_string();
+    let log_line = format!("[{}] [{}] [{}]\n{}\n----------------------------------------------------\n", now, module, action, message);
+
+    // Silently continue if failed
+    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(desktop_path) {
+        let _ = file.write_all(log_line.as_bytes());
+    }
+    Ok(())
+}
+
 // ── Login Response ──
 #[derive(Serialize)]
 struct LoginResult {
@@ -129,10 +147,15 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
 
     if !res.status().is_success() {
         let err_text = res.text().await.unwrap_or_default();
+        let _ = write_debug_log("Kelompok 1 - OAuth".into(), "TokenExchange".into(), format!("Error HTTP: {}", err_text));
         return Err(format!("Token Exchange Error: {}", err_text));
     }
 
-    let token_data: TokenResponse = res.json().await.map_err(|e| e.to_string())?;
+    let token_data: TokenResponse = res.json().await.map_err(|e| {
+        let _ = write_debug_log("Kelompok 1 - OAuth".into(), "TokenExchange".into(), format!("JSON Parse Error: {}", e));
+        e.to_string()
+    })?;
+    let _ = write_debug_log("Kelompok 1 - OAuth".into(), "TokenExchange".into(), "Sukses menukar token otorisasi".into());
 
     // ── Step 2: Fetch project_id via loadCodeAssist (prod first, then fallback) ──
     let project_id = fetch_project_id_internal(&client, &token_data.access_token).await
@@ -315,11 +338,17 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
 
     if !res.status().is_success() {
         let err_text = res.text().await.unwrap_or_default();
+        let _ = write_debug_log("Kelompok 1 - OAuth".into(), "RefreshToken".into(), format!("Error HTTP: {}", err_text));
         return Err(format!("Token refresh error: {}", err_text));
     }
 
     // Return raw JSON dari Google (berisi access_token, expires_in, dll.)
-    let body = res.text().await.map_err(|e| format!("Read body error: {}", e))?;
+    let body = res.text().await.map_err(|e| {
+        let _ = write_debug_log("Kelompok 1 - OAuth".into(), "RefreshToken".into(), format!("Read body error: {}", e));
+        format!("Read body error: {}", e)
+    })?;
+    
+    let _ = write_debug_log("Kelompok 1 - OAuth".into(), "RefreshToken".into(), "Berhasil refresh token".into());
     Ok(body)
 }
 
@@ -451,6 +480,8 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
         "project": project_id
     });
 
+    let _ = write_debug_log("Kelompok 2 - fetchModels".into(), "Request".into(), format!("URL: {}\nPayload: {}", url, body));
+
     // Mengambil sisa kuota (Bypass panic, abaikan jika gagal, tetap return list kosong/awal)
     if let Ok(res) = client.post(&url)
         .bearer_auth(&access_token)
@@ -460,8 +491,12 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
         .send()
         .await
     {
-        if res.status().is_success() {
-            if let Ok(json) = res.json::<Value>().await {
+        let status = res.status().as_u16();
+        let err_text = res.text().await.unwrap_or_default();
+        let _ = write_debug_log("Kelompok 2 - fetchModels".into(), "Response".into(), format!("HTTP {}\nRaw: {}", status, err_text));
+
+        if status >= 200 && status < 300 {
+            if let Ok(json) = serde_json::from_str::<Value>(&err_text) {
                 // Parsing field models
                 let models_obj = json.get("models").or_else(|| {
                     json.get("response").and_then(|r| r.get("models"))
@@ -576,10 +611,16 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
                 };
 
             let status = res.status().as_u16();
+            let err_text = res.text().await.unwrap_or_default();
             
-            if res.status().is_success() {
-                let raw_text = res.text().await.unwrap_or_default();
-                if let Ok(data) = serde_json::from_str::<Value>(&raw_text) {
+            let _ = write_debug_log(
+                "Kelompok 2 - Antigravity API".to_string(), 
+                format!("ChatResponse - {} ({})", model, endpoint), 
+                format!("HTTP Status: {}\nRaw Body:\n{}", status, err_text)
+            );
+            
+            if status >= 200 && status < 300 {
+                if let Ok(data) = serde_json::from_str::<Value>(&err_text) {
                     response_data = Some(data);
                     success = true;
                     break;
@@ -590,7 +631,6 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
             }
 
             // Jika GAGAL pada endpoint ini:
-            let err_text = res.text().await.unwrap_or_default();
             last_err = match status {
                 401 => "Token autentikasi sudah kedaluwarsa. Silakan login ulang.".to_string(),
                 403 => "Akses ditolak. Silakan login ulang atau periksa izin akun Anda.".to_string(),
@@ -716,7 +756,8 @@ pub fn run() {
             login_oauth_proxy,
             fetch_gemini_models_with_quota,
             execute_model_prompt,
-            refresh_access_token
+            refresh_access_token,
+            write_debug_log
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
