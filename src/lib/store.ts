@@ -117,8 +117,8 @@ const logMiddleware = (config: any) => (set: any, get: any, api: any) =>
 
 export const useAppStore = create<AppState>()(
   logMiddleware(
-    persist(
-      (set: any) => ({
+    persist<AppState>(
+      (set) => ({
         currentPage: 'login',
         mode: 'BASIC',
         isAuthenticated: false,
@@ -135,29 +135,29 @@ export const useAppStore = create<AppState>()(
       userName: null,
       userEmail: null,
 
-      navigate: (page: any) => set({ currentPage: page }),
-      setMode: (mode: any) => set({ mode }),
-      setAuthenticated: (val: any) => set({ isAuthenticated: val }),
-      setProfileOpen: (val: any) => set({ isProfileOpen: val }),
-      setSelectedTemplate: (t: any) => set({ selectedTemplate: t }),
-      setFilter: (filter: any) => set({ filter, templatePage: 0 }),
-      setTemplatePage: (page: any) => set({ templatePage: page }),
-      updateWizardData: (data: any) =>
-          set((state: any) => ({ wizardData: { ...state.wizardData, ...data } })),
-      toggleWizardPage: (page: any) =>
-          set((state: any) => ({
+      navigate: (page: AppPage) => set({ currentPage: page }),
+      setMode: (mode: AppMode) => set({ mode }),
+      setAuthenticated: (val: boolean) => set({ isAuthenticated: val }),
+      setProfileOpen: (val: boolean) => set({ isProfileOpen: val }),
+      setSelectedTemplate: (t: TemplateItem | null) => set({ selectedTemplate: t }),
+      setFilter: (filter: string) => set({ filter, templatePage: 0 }),
+      setTemplatePage: (page: number) => set({ templatePage: page }),
+      updateWizardData: (data: Partial<WizardData>) =>
+          set((state: AppState) => ({ wizardData: { ...state.wizardData, ...data } })),
+      toggleWizardPage: (page: string) =>
+          set((state: AppState) => ({
               wizardData: {
                   ...state.wizardData,
                   pages: state.wizardData.pages.includes(page)
-                      ? state.wizardData.pages.filter((p: any) => p !== page)
+                      ? state.wizardData.pages.filter((p) => p !== page)
                       : [...state.wizardData.pages, page],
               },
           })),
-      setAiModels: (models: any) => set({ aiModels: models }),
-      setSelectedModel: (model: any) => set({ selectedModel: model }),
-      setOauthToken: (token: any) => set({ oauthToken: token }),
-      setProjectId: (id: any) => set({ projectId: id }),
-      setRefreshToken: (token: any) => set({ refreshToken: token }),
+      setAiModels: (models: AntigravityModel[]) => set({ aiModels: models }),
+      setSelectedModel: (model: AntigravityModel) => set({ selectedModel: model }),
+      setOauthToken: (token: string) => set({ oauthToken: token }),
+      setProjectId: (id: string) => set({ projectId: id }),
+      setRefreshToken: (token: string) => set({ refreshToken: token }),
       setUserName: (name: string) => set({ userName: name }),
       setUserEmail: (email: string) => set({ userEmail: email }),
     }),
