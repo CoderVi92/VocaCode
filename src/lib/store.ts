@@ -29,6 +29,11 @@ export interface WizardData {
     outputType: 'static' | 'dynamic'
 }
 
+export interface AiModelTier {
+    id: string
+    name: string
+}
+
 export interface AntigravityModel {
     id: string
     name: string
@@ -38,6 +43,8 @@ export interface AntigravityModel {
     outputTokenLimit: number
     source: string
     quotaPercent?: number
+    tiers?: AiModelTier[]
+    selectedTierId?: string
 }
 
 interface AppState {

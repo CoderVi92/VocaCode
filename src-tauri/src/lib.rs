@@ -326,6 +326,12 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
 
 // ── Model List ──
 #[derive(serde::Serialize)]
+struct AiModelTier {
+    id: String,
+    name: String,
+}
+
+#[derive(serde::Serialize)]
 struct AntigravityModel {
     id: String,
     name: String,
@@ -339,6 +345,10 @@ struct AntigravityModel {
     source: String,
     #[serde(rename = "quotaPercent", skip_serializing_if = "Option::is_none")]
     quota_percent: Option<u8>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tiers: Option<Vec<AiModelTier>>,
+    #[serde(rename = "selectedTierId", skip_serializing_if = "Option::is_none")]
+    selected_tier_id: Option<String>,
 }
 
 #[tauri::command]
@@ -347,94 +357,90 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
     // Model list synced 100% dengan server.cjs MODELS array
     let mut models = vec![
         AntigravityModel {
-            id: "gemini-3.1-pro-low".into(),
-            name: "gemini-3.1-pro-low".into(),
-            display_name: "Gemini 3.1 Pro (Low Thinking)".into(),
-            description: "Gemini 3.1 Pro with low thinking budget".into(),
+            id: "gemini-3.1-pro".into(),
+            name: "gemini-3.1-pro".into(),
+            display_name: "Gemini 3.1 Pro".into(),
+            description: "Google's most capable model with advanced thinking".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
             source: "antigravity".into(),
             quota_percent: None,
+            selected_tier_id: Some("gemini-3.1-pro-low".into()),
+            tiers: Some(vec![
+                AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Low Thinking".into() },
+                AiModelTier { id: "gemini-3.1-pro-high".into(), name: "High Thinking".into() },
+            ]),
         },
         AntigravityModel {
-            id: "gemini-3.1-pro-high".into(),
-            name: "gemini-3.1-pro-high".into(),
-            display_name: "Gemini 3.1 Pro (High Thinking)".into(),
-            description: "Gemini 3.1 Pro with high thinking budget".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_535,
-            source: "antigravity".into(),
-            quota_percent: None,
-        },
-        AntigravityModel {
-            id: "gemini-3-flash-minimal".into(),
-            name: "gemini-3-flash-minimal".into(),
-            display_name: "Gemini 3 Flash (Minimal Thinking)".into(),
-            description: "Gemini 3 Flash with minimal thinking".into(),
+            id: "gemini-3-flash".into(),
+            name: "gemini-3-flash".into(),
+            display_name: "Gemini 3 Flash".into(),
+            description: "Fast and versatile model for everyday tasks".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_536,
             source: "antigravity".into(),
             quota_percent: None,
-        },
-        AntigravityModel {
-            id: "gemini-3-flash-low".into(),
-            name: "gemini-3-flash-low".into(),
-            display_name: "Gemini 3 Flash (Low Thinking)".into(),
-            description: "Gemini 3 Flash with low thinking".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_536,
-            source: "antigravity".into(),
-            quota_percent: None,
-        },
-        AntigravityModel {
-            id: "gemini-3-flash-medium".into(),
-            name: "gemini-3-flash-medium".into(),
-            display_name: "Gemini 3 Flash (Medium Thinking)".into(),
-            description: "Gemini 3 Flash with medium thinking".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_536,
-            source: "antigravity".into(),
-            quota_percent: None,
-        },
-        AntigravityModel {
-            id: "gemini-3-flash-high".into(),
-            name: "gemini-3-flash-high".into(),
-            display_name: "Gemini 3 Flash (High Thinking)".into(),
-            description: "Gemini 3 Flash with high thinking".into(),
-            input_token_limit: 1_048_576,
-            output_token_limit: 65_536,
-            source: "antigravity".into(),
-            quota_percent: None,
+            selected_tier_id: Some("gemini-3-flash-minimal".into()),
+            tiers: Some(vec![
+                AiModelTier { id: "gemini-3-flash-minimal".into(), name: "Minimal Thinking".into() },
+                AiModelTier { id: "gemini-3-flash-low".into(), name: "Low Thinking".into() },
+                AiModelTier { id: "gemini-3-flash-medium".into(), name: "Medium Thinking".into() },
+                AiModelTier { id: "gemini-3-flash-high".into(), name: "High Thinking".into() },
+            ]),
         },
         AntigravityModel {
             id: "claude-sonnet-4-6".into(),
             name: "claude-sonnet-4-6".into(),
-            display_name: "Claude Sonnet 4.6 (Non-Thinking)".into(),
-            description: "Claude Sonnet 4.6 via Antigravity".into(),
+            display_name: "Claude Sonnet 4.6".into(),
+            description: "Anthropic's balanced model for high intelligence and speed".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
             quota_percent: None,
+            selected_tier_id: None,
+            tiers: None,
         },
         AntigravityModel {
-            id: "claude-sonnet-4-6-thinking-max".into(),
-            name: "claude-sonnet-4-6-thinking-max".into(),
-            display_name: "Claude Sonnet 4.6 (Max Thinking)".into(),
-            description: "Claude Sonnet 4.6 with max thinking".into(),
+            id: "claude-sonnet-4-6-thinking".into(),
+            name: "claude-sonnet-4-6-thinking".into(),
+            display_name: "Claude Sonnet 4.6 (Thinking)".into(),
+            description: "Claude Sonnet extended thinking capabilities".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
             quota_percent: None,
+            selected_tier_id: Some("claude-sonnet-4-6-thinking-low".into()),
+            tiers: Some(vec![
+                AiModelTier { id: "claude-sonnet-4-6-thinking-low".into(), name: "Low Thinking".into() },
+                AiModelTier { id: "claude-sonnet-4-6-thinking-max".into(), name: "Max Thinking".into() },
+            ]),
         },
         AntigravityModel {
-            id: "claude-opus-4-6-thinking-max".into(),
-            name: "claude-opus-4-6-thinking-max".into(),
-            display_name: "Claude Opus 4.6 (Max Thinking)".into(),
-            description: "Claude Opus 4.6 with max thinking".into(),
+            id: "claude-opus-4-6-thinking".into(),
+            name: "claude-opus-4-6-thinking".into(),
+            display_name: "Claude Opus 4.6 (Thinking)".into(),
+            description: "Claude's most powerful reasoning model".into(),
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
             quota_percent: None,
+            selected_tier_id: Some("claude-opus-4-6-thinking-low".into()),
+            tiers: Some(vec![
+                AiModelTier { id: "claude-opus-4-6-thinking-low".into(), name: "Low Thinking".into() },
+                AiModelTier { id: "claude-opus-4-6-thinking-max".into(), name: "Max Thinking".into() },
+            ]),
+        },
+        AntigravityModel {
+            id: "gpt-oss-120b-medium".into(),
+            name: "gpt-oss-120b-medium".into(),
+            display_name: "GPT-OSS 120B (Medium)".into(),
+            description: "High-performance open weights model".into(),
+            input_token_limit: 128_000,
+            output_token_limit: 4_000,
+            source: "antigravity".into(),
+            quota_percent: None,
+            selected_tier_id: None,
+            tiers: None,
         },
     ];
 
@@ -484,8 +490,22 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
                             }
                         }
 
-                        // Pass 2: Partial match (model.id mengandung key, atau key mengandung model.id)
-                        // Ini menangani kasus seperti API key "gemini-3-flash" ↔ model ID "gemini-3-flash-minimal"
+                        // Pass 2: Jika tidak exact match, match ke base model jika key ada di dalam tiers
+                        // Misalnya key API = "gemini-3.1-pro-high", masuk kuotanya ke base model "gemini-3.1-pro"
+                        if !matched {
+                            for model in models.iter_mut() {
+                                if let Some(ref tiers) = model.tiers {
+                                    if tiers.iter().any(|t| t.id == *key) {
+                                        // Update persentase kuota di base model
+                                        model.quota_percent = Some(percent);
+                                        matched = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+
+                        // Pass 3: Fallback loose partial match
                         if !matched {
                             for model in models.iter_mut() {
                                 if model.quota_percent.is_none() && (model.id.contains(key.as_str()) || key.contains(model.id.as_str())) {

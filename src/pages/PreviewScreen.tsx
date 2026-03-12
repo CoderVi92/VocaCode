@@ -54,8 +54,16 @@ export default function PreviewScreen() {
         setAiResponse('')
         setIsGenerating(true)
 
-        const modelId = selectedModel?.id || 'antigravity-gemini-3.1-pro'
-        const modelName = selectedModel?.displayName || modelId
+        const baseModelId = selectedModel?.id || 'gemini-3.1-pro'
+        
+        // Prioritaskan selectedTierId jika ada. Jika tidak, gunakan baseModelId.
+        const modelId = selectedModel?.selectedTierId || baseModelId
+        
+        // Cari nama tier jika sedang menggunakan tier
+        const tierName = selectedModel?.tiers?.find(t => t.id === modelId)?.name
+        const modelName = selectedModel?.displayName 
+            ? `${selectedModel.displayName}${tierName ? ` (${tierName})` : ''}` 
+            : modelId
 
         addLog('text-indigo-400', `> mengirim instruksi ke ${modelName} ...`)
         addLog('text-gray-500', `> prompt: "${prompt.length > 60 ? prompt.slice(0, 60) + '...' : prompt}"`)

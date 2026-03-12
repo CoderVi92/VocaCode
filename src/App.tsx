@@ -244,28 +244,58 @@ export default function App() {
                       className="absolute top-10 left-0 w-80 bg-[#161920] border border-white/10 rounded-xl shadow-2xl py-2 z-[100]"
                     >
                       <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Pilih Model AI</p>
-                      {aiModels.map((model) => (
-                        <button
-                          key={model.id}
-                          onClick={() => {
-                            setSelectedModel(model)
-                            setModelSelectorOpen(false)
-                          }}
-                          className={`w-full flex items-center justify-between px-4 py-2.5 hover:bg-white/5 transition-colors text-left ${
-                            selectedModel?.id === model.id ? 'bg-indigo-600/10' : ''
-                          }`}
-                        >
-                          <div className="flex flex-col">
-                            <span className={`text-[11px] font-bold ${selectedModel?.id === model.id ? 'text-indigo-300' : 'text-gray-300'}`}>
-                              {model.displayName} {mode === 'BASIC' && model.quotaPercent !== undefined ? `| ${model.quotaPercent}%` : ''}
-                            </span>
-                            <span className="text-[9px] text-gray-600 mt-0.5">{model.description}</span>
+                      {aiModels.map((model) => {
+                        const isSelected = selectedModel?.id === model.id
+                        return (
+                          <div key={model.id} className="flex flex-col border-b border-white/5 last:border-0">
+                            <button
+                              onClick={() => {
+                                setSelectedModel(model)
+                                // Jika tidak ada tiers, tutup dropdown. Jika ada, biarkan terbuka agar user bisa pilih tier
+                                if (!model.tiers?.length) {
+                                  setModelSelectorOpen(false)
+                                }
+                              }}
+                              className={`w-full flex items-center justify-between px-4 py-2.5 transition-colors text-left ${
+                                isSelected ? 'bg-indigo-600/10' : 'hover:bg-white/5'
+                              }`}
+                            >
+                              <div className="flex flex-col">
+                                <span className={`text-[11px] font-bold ${isSelected ? 'text-indigo-300' : 'text-gray-300'}`}>
+                                  {model.displayName} {mode === 'BASIC' && model.quotaPercent !== undefined ? `| ${model.quotaPercent}%` : ''}
+                                </span>
+                                <span className="text-[9px] text-gray-600 mt-0.5">{model.description}</span>
+                              </div>
+                              {isSelected && !model.tiers?.length && (
+                                <CheckCircle2 size={14} className="text-indigo-400 shrink-0 ml-2" />
+                              )}
+                            </button>
+
+                            {/* Thinking Tiers Options (Hanya muncul jika model ini yang terpilih & memiliki tiers) */}
+                            {isSelected && model.tiers && model.tiers.length > 0 && (
+                              <div className="flex flex-wrap gap-1.5 px-4 pb-3 pt-1 bg-indigo-600/5">
+                                {model.tiers.map((tier) => (
+                                  <button
+                                    key={tier.id}
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      setSelectedModel({ ...model, selectedTierId: tier.id })
+                                      setModelSelectorOpen(false)
+                                    }}
+                                    className={`px-2 py-1 text-[9px] font-medium rounded transition-colors ${
+                                      model.selectedTierId === tier.id
+                                        ? 'bg-indigo-500 text-white'
+                                        : 'bg-[#1e2330] text-gray-400 hover:text-gray-200 hover:bg-[#252b3b] border border-white/5'
+                                    }`}
+                                  >
+                                    {tier.name}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
                           </div>
-                          {selectedModel?.id === model.id && (
-                            <CheckCircle2 size={14} className="text-indigo-400 shrink-0 ml-2" />
-                          )}
-                        </button>
-                      ))}
+                        )
+                      })}
                     </motion.div>
                   )}
                 </AnimatePresence>
