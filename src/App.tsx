@@ -21,6 +21,14 @@ try {
   })
 } catch (_) { /* browser fallback */ }
 
+// Tauri app version API
+let tauriGetVersion: (() => Promise<string>) | null = null
+try {
+  import('@tauri-apps/api/app').then((mod) => {
+    tauriGetVersion = mod.getVersion
+  })
+} catch (_) { /* browser fallback */ }
+
 const HEADER_PAGES = ['explorer', 'wizard1', 'wizard2', 'wizard3', 'final_preview']
 const FOOTER_PAGES = ['explorer', 'wizard1', 'wizard2', 'wizard3', 'final_preview']
 
@@ -37,6 +45,30 @@ export default function App() {
   const userName = useAppStore((s) => s.userName)
   const userEmail = useAppStore((s) => s.userEmail)
   const profileRef = useRef<HTMLDivElement>(null)
+  const [appVersion, setAppVersion] = useState('...')
+
+  // Fetch app version from Tauri
+  useEffect(() => {
+    const fetchVersion = async () => {
+      try {
+        if (tauriGetVersion) {
+          const v = await tauriGetVersion()
+          setAppVersion(v)
+        } else {
+          // Retry after dynamic import resolves
+          setTimeout(async () => {
+            if (tauriGetVersion) {
+              const v = await tauriGetVersion()
+              setAppVersion(v)
+            }
+          }, 500)
+        }
+      } catch (_) {
+        setAppVersion('dev')
+      }
+    }
+    fetchVersion()
+  }, [])
 
   // Auto-login logic (Hydration persist run) — mengikuti pola server.cjs refreshAccessTokenSafe
   useEffect(() => {
@@ -386,7 +418,7 @@ export default function App() {
                 <span className="text-[10px] font-bold uppercase">Latensi: 24ms</span>
               </div>
             </div>
-            <div className="text-[10px] text-gray-700 font-mono tracking-tighter">BUILD v0.1.0-ALPHA</div>
+            <div className="text-[10px] text-gray-700 font-mono tracking-tighter">BUILD v{appVersion}-ALPHA</div>
           </motion.footer>
         )}
       </AnimatePresence>

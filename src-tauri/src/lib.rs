@@ -463,13 +463,33 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
 
                 if let Some(obj) = models_obj.and_then(|m| m.as_object()) {
                     for (key, val) in obj {
-                        // Merging dengan models array
-                        if let Some(model) = models.iter_mut().find(|m| m.id == *key) {
-                            if let Some(info) = val.get("quotaInfo") {
-                                if let Some(frac) = info.get("remainingFraction").and_then(|f| f.as_f64()) {
-                                    model.quota_percent = Some((frac * 100.0).round() as u8);
-                                } else {
-                                    model.quota_percent = Some(0);
+                        // Skip model yang tidak relevan (sesuai server.cjs filter)
+                        if key.contains("gemini-2.5") || key.starts_with("tab_") || key.starts_with("chat_") {
+                            continue;
+                        }
+
+                        let frac = val.get("quotaInfo")
+                            .and_then(|qi| qi.get("remainingFraction"))
+                            .and_then(|f| f.as_f64());
+
+                        let percent = frac.map(|f| (f * 100.0).round() as u8).unwrap_or(0);
+
+                        // Pass 1: Exact match (key == model.id)
+                        let mut matched = false;
+                        for model in models.iter_mut() {
+                            if model.id == *key {
+                                model.quota_percent = Some(percent);
+                                matched = true;
+                                break;
+                            }
+                        }
+
+                        // Pass 2: Partial match (model.id mengandung key, atau key mengandung model.id)
+                        // Ini menangani kasus seperti API key "gemini-3-flash" ↔ model ID "gemini-3-flash-minimal"
+                        if !matched {
+                            for model in models.iter_mut() {
+                                if model.quota_percent.is_none() && (model.id.contains(key.as_str()) || key.contains(model.id.as_str())) {
+                                    model.quota_percent = Some(percent);
                                 }
                             }
                         }
@@ -483,7 +503,7 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
 }
 
 
-// ── Execute Model Prompt — Non-streaming (matching server.cjs chatWithModel) ──
+// ── Execute Model Prompt — Non-streaming with retry (matching server.cjs chatWithModelRetry) ──
 #[tauri::command]
 async fn execute_model_prompt(app: AppHandle, token: String, project_id: String, model: String, prompt: String) -> Result<(), String> {
     let effective_project = if project_id.trim().is_empty() {
@@ -504,105 +524,180 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
     // Endpoint fallback: daily → autopush → prod (matching server.cjs CHAT_ENDPOINTS)
     let chat_endpoints = [ENDPOINT_DAILY, ENDPOINT_AUTOPUSH, ENDPOINT_PROD];
     let client = reqwest::Client::new();
-    let mut last_err = String::from("All endpoints failed");
 
-    for endpoint in &chat_endpoints {
-        // URL: /v1internal:generateContent (NON-STREAMING, persis server.cjs baris 390)
-        let url = format!("{}/{}:generateContent", endpoint, API_VERSION);
+    // Retry logic (matching server.cjs chatWithModelRetry, baris 465-480)
+    let max_retries: u32 = 3;
 
-        let res = match client.post(&url)
-            .bearer_auth(&token)
-            .header("Content-Type", "application/json")
-            .header("User-Agent", HEADER_UA_ANTIGRAVITY)
-            .header("X-Goog-Api-Client", HEADER_X_GOOG_API_CLIENT)
-            .header("Client-Metadata", client_metadata())
-            .json(&payload)
-            .send()
-            .await {
-                Ok(r) => r,
-                Err(e) => {
-                    last_err = format!("Request to {} failed: {}", endpoint, e);
-                    continue;
-                }
-            };
+    for attempt in 1..=max_retries {
+        let mut last_err = String::from("Semua endpoint gagal.");
+        let mut should_retry = false;
+        let mut retry_status: u16 = 0;
 
-        if !res.status().is_success() {
+        for endpoint in &chat_endpoints {
+            // URL: /v1internal:generateContent (NON-STREAMING, persis server.cjs baris 390)
+            let url = format!("{}/{}:generateContent", endpoint, API_VERSION);
+
+            let res = match client.post(&url)
+                .bearer_auth(&token)
+                .header("Content-Type", "application/json")
+                .header("User-Agent", HEADER_UA_ANTIGRAVITY)
+                .header("X-Goog-Api-Client", HEADER_X_GOOG_API_CLIENT)
+                .header("Client-Metadata", client_metadata())
+                .json(&payload)
+                .send()
+                .await {
+                    Ok(r) => r,
+                    Err(e) => {
+                        last_err = format!("Gagal menghubungi server: {}", e);
+                        continue;
+                    }
+                };
+
             let status = res.status().as_u16();
-            let err_text = res.text().await.unwrap_or_default();
-            last_err = format!("API Error ({}): {}", status, err_text);
-            if status == 404 {
-                continue; // Wrong endpoint, try next
+
+            if !res.status().is_success() {
+                let err_text = res.text().await.unwrap_or_default();
+
+                // Pesan error ramah berdasarkan status code
+                last_err = match status {
+                    401 => "Token autentikasi sudah kedaluwarsa. Silakan login ulang.".to_string(),
+                    403 => "Akses ditolak. Silakan login ulang atau periksa izin akun Anda.".to_string(),
+                    429 => format!("Batas permintaan tercapai untuk model {}. Menunggu sebelum mencoba lagi...", model),
+                    503 => {
+                        // Cek apakah error MODEL_CAPACITY_EXHAUSTED
+                        if err_text.contains("MODEL_CAPACITY_EXHAUSTED") || err_text.contains("No capacity available") {
+                            format!("Model {} sedang penuh (kapasitas habis). Mencoba ulang...", model)
+                        } else {
+                            format!("Server sedang sibuk. Mencoba ulang...")
+                        }
+                    },
+                    404 => {
+                        // Wrong endpoint, try next silently
+                        continue;
+                    },
+                    _ => {
+                        // Check for quota exhausted in response body
+                        if err_text.contains("RESOURCE_EXHAUSTED") || err_text.contains("quota") {
+                            format!("Kuota untuk model {} sudah habis. Coba gunakan model lain.", model)
+                        } else {
+                            format!("Error API ({}): {}", status, if err_text.len() > 200 { &err_text[..200] } else { &err_text })
+                        }
+                    }
+                };
+
+                // 429 dan 503 bisa di-retry (matching server.cjs baris 471)
+                if (status == 429 || status == 503) && attempt < max_retries {
+                    should_retry = true;
+                    retry_status = status;
+                    break; // keluar dari endpoint loop, masuk retry
+                }
+
+                let _ = app.emit("ai_error", &last_err);
+                return Err(last_err);
             }
-            let _ = app.emit("ai_error", &last_err);
-            return Err(last_err);
-        }
 
-        // Non-streaming: baca seluruh JSON response sekaligus (persis server.cjs baris 415-452)
-        let raw_text = res.text().await.unwrap_or_default();
+            // Non-streaming: baca seluruh JSON response sekaligus (persis server.cjs baris 415-452)
+            let raw_text = res.text().await.unwrap_or_default();
 
-        if let Ok(data) = serde_json::from_str::<Value>(&raw_text) {
-            // Check for API-level error
-            if let Some(err) = data.get("error") {
-                let err_msg = err.get("message")
-                    .and_then(|m| m.as_str())
-                    .unwrap_or("Unknown API error");
-                let _ = app.emit("ai_error", err_msg);
-                return Err(err_msg.to_string());
-            }
+            if let Ok(data) = serde_json::from_str::<Value>(&raw_text) {
+                // Check for API-level error
+                if let Some(err) = data.get("error") {
+                    let err_code = err.get("code").and_then(|c| c.as_u64()).unwrap_or(0);
+                    let err_status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
+                    let raw_msg = err.get("message")
+                        .and_then(|m| m.as_str())
+                        .unwrap_or("Error tidak diketahui dari API");
 
-            // Response bisa ter-wrap: { response: { candidates: [...] } }
-            // atau langsung: { candidates: [...] }
-            // (matching server.cjs baris 425)
-            let candidates = data.get("candidates")
-                .or_else(|| data.pointer("/response/candidates"));
+                    // Terjemahkan error ke pesan ramah
+                    let friendly_msg = if err_status == "RESOURCE_EXHAUSTED" || raw_msg.contains("quota") {
+                        format!("Kuota untuk model {} sudah habis. Coba gunakan model lain.", model)
+                    } else if err_code == 503 || raw_msg.contains("No capacity") {
+                        format!("Model {} sedang penuh. Coba beberapa saat lagi atau gunakan model lain.", model)
+                    } else if err_code == 429 {
+                        format!("Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.")
+                    } else {
+                        format!("Error AI: {}", raw_msg)
+                    };
 
-            let mut text = String::new();
+                    let _ = app.emit("ai_error", &friendly_msg);
+                    return Err(friendly_msg);
+                }
 
-            if let Some(cands) = candidates.and_then(|c| c.as_array()) {
-                if let Some(first) = cands.first() {
-                    if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
-                        // Cari text dari parts, skip thinking parts (matching server.cjs baris 430-431)
-                        for part in parts {
-                            let is_thought = part.get("thought")
-                                .and_then(|t| t.as_bool())
-                                .unwrap_or(false);
-                            if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                                if !t.is_empty() && !is_thought {
-                                    text = t.to_string();
-                                    break;
+                // Response bisa ter-wrap: { response: { candidates: [...] } }
+                // atau langsung: { candidates: [...] }
+                // (matching server.cjs baris 425)
+                let candidates = data.get("candidates")
+                    .or_else(|| data.pointer("/response/candidates"));
+
+                let mut text = String::new();
+
+                if let Some(cands) = candidates.and_then(|c| c.as_array()) {
+                    if let Some(first) = cands.first() {
+                        if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
+                            // Cari text dari parts, skip thinking parts (matching server.cjs baris 430-431)
+                            for part in parts {
+                                let is_thought = part.get("thought")
+                                    .and_then(|t| t.as_bool())
+                                    .unwrap_or(false);
+                                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                                    if !t.is_empty() && !is_thought {
+                                        text = t.to_string();
+                                        break;
+                                    }
                                 }
                             }
-                        }
-                        // Fallback: ambil text dari part pertama apapun (matching server.cjs baris 438-440)
-                        if text.is_empty() {
-                            if let Some(first_part) = parts.first() {
-                                if let Some(t) = first_part.get("text").and_then(|t| t.as_str()) {
-                                    text = t.to_string();
+                            // Fallback: ambil text dari part pertama apapun (matching server.cjs baris 438-440)
+                            if text.is_empty() {
+                                if let Some(first_part) = parts.first() {
+                                    if let Some(t) = first_part.get("text").and_then(|t| t.as_str()) {
+                                        text = t.to_string();
+                                    }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            if text.is_empty() {
-                text = "(Respon kosong — model tidak mengembalikan teks)".to_string();
-            }
+                if text.is_empty() {
+                    text = "(Respon kosong — model tidak mengembalikan teks)".to_string();
+                }
 
-            let _ = app.emit("ai_chunk", text.as_str());
-            let _ = app.emit("ai_complete", ());
-            return Ok(());
-        } else {
-            // Response bukan JSON valid — emit sebagai raw text
-            let _ = app.emit("ai_chunk", raw_text.as_str());
-            let _ = app.emit("ai_complete", ());
-            return Ok(());
+                let _ = app.emit("ai_chunk", text.as_str());
+                let _ = app.emit("ai_complete", ());
+                return Ok(());
+            } else {
+                // Response bukan JSON valid — emit sebagai raw text
+                let _ = app.emit("ai_chunk", raw_text.as_str());
+                let _ = app.emit("ai_complete", ());
+                return Ok(());
+            }
         }
+
+        // Retry backoff (matching server.cjs: waitSec = attempt * 3)
+        if should_retry {
+            let wait_secs = attempt as u64 * 3;
+            let retry_msg = format!("⏳ Percobaan {}/{} — menunggu {}s (error {})...", attempt, max_retries, wait_secs, retry_status);
+            let _ = app.emit("ai_chunk", retry_msg.as_str());
+
+            // Async sleep
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_secs(wait_secs));
+                let _ = tx.send(());
+            });
+            let _ = tauri::async_runtime::spawn_blocking(move || { let _ = rx.recv(); }).await;
+            continue;
+        }
+
+        // Jika tidak ada retry, emit error terakhir
+        let _ = app.emit("ai_error", &last_err);
+        return Err(last_err);
     }
 
-    // All endpoints failed
-    let _ = app.emit("ai_error", &last_err);
-    Err(last_err)
+    // Max retry tercapai
+    let final_err = format!("Model {} gagal merespons setelah {} percobaan. Coba gunakan model lain.", model, max_retries);
+    let _ = app.emit("ai_error", &final_err);
+    Err(final_err)
 }
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
