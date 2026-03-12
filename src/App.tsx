@@ -271,7 +271,7 @@ export default function App() {
                               )}
                             </button>
 
-                            {/* Thinking Tiers Options (Hanya muncul jika model ini yang terpilih & memiliki tiers) */}
+                            {/* Thinking Tiers Options */}
                             {isSelected && model.tiers && model.tiers.length > 0 && (
                               <div className="flex flex-wrap gap-1.5 px-4 pb-3 pt-1 bg-indigo-600/5">
                                 {model.tiers.map((tier) => (
@@ -279,11 +279,11 @@ export default function App() {
                                     key={tier.id}
                                     onClick={(e) => {
                                       e.stopPropagation()
-                                      setSelectedModel({ ...model, selectedTierId: tier.id })
+                                      setSelectedModel({ ...selectedModel, selectedTierId: tier.id } as any)
                                       setModelSelectorOpen(false)
                                     }}
                                     className={`px-2 py-1 text-[9px] font-medium rounded transition-colors ${
-                                      model.selectedTierId === tier.id
+                                      selectedModel?.selectedTierId === tier.id
                                         ? 'bg-indigo-500 text-white'
                                         : 'bg-[#1e2330] text-gray-400 hover:text-gray-200 hover:bg-[#252b3b] border border-white/5'
                                     }`}

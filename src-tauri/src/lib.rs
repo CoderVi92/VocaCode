@@ -532,13 +532,43 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
         project_id
     };
 
-    // Body persis seperti server.cjs chatWithModel (baris 395-401)
+    // Parsing model thinking tier (seperti gemini-3-flash-high)
+    let mut actual_model = model.clone();
+    let mut thinking_config = None;
+
+    if model.starts_with("gemini-3-flash-") {
+        actual_model = "gemini-3-flash".to_string();
+        let tier = model.strip_prefix("gemini-3-flash-").unwrap_or("minimal");
+        // Antigravity API for Gemini 3 Flash expects string level: "minimal", "low", "medium", "high"
+        thinking_config = Some(serde_json::json!({
+            "includeThoughts": true,
+            "thinkingLevel": tier
+        }));
+    } else if model.starts_with("gemini-3.1-pro-") {
+        actual_model = "gemini-3.1-pro-preview".to_string(); // Sesuai referensi legacy fallbacks
+        let tier = model.strip_prefix("gemini-3.1-pro-").unwrap_or("low");
+        thinking_config = Some(serde_json::json!({
+            "includeThoughts": true,
+            "thinkingLevel": tier
+        }));
+    }
+
+    // Body persis seperti server.cjs chatWithModel
+    let mut request_payload = serde_json::json!({
+        "contents": [{ "role": "user", "parts": [{ "text": prompt }] }]
+    });
+
+    if let Some(tc) = thinking_config {
+        request_payload.as_object_mut().unwrap().insert(
+            "generationConfig".to_string(),
+            serde_json::json!({ "thinkingConfig": tc })
+        );
+    }
+
     let payload = serde_json::json!({
         "project": effective_project,
-        "model": model,
-        "request": {
-            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }]
-        }
+        "model": actual_model,
+        "request": request_payload
     });
 
     // Endpoint fallback: daily → autopush → prod (matching server.cjs CHAT_ENDPOINTS)
