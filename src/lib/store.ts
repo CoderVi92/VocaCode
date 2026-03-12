@@ -104,8 +104,8 @@ const logMiddleware = (config: any) => (set: any, get: any, api: any) =>
       
       // Cari perbedaan state untuk dilog (sangat mendetail sesuai permintaan user)
       Object.keys(newState).forEach(key => {
-        if (prevState[key] !== newState[key] && typeof newState[key] !== 'function') {
-          const val = newState[key];
+        if (prevState[key] !== newState[key] && typeof (newState as any)[key] !== 'function') {
+          const val = (newState as any)[key];
           const valStr = typeof val === 'object' ? JSON.stringify(val) : val;
           logger.info("STATE-CHANGE", key, `Berubah menjadi: ${valStr}`);
         }
@@ -118,7 +118,7 @@ const logMiddleware = (config: any) => (set: any, get: any, api: any) =>
 export const useAppStore = create<AppState>()(
   logMiddleware(
     persist(
-      (set, get) => ({
+      (set: any) => ({
         currentPage: 'login',
         mode: 'BASIC',
         isAuthenticated: false,
@@ -135,35 +135,35 @@ export const useAppStore = create<AppState>()(
       userName: null,
       userEmail: null,
 
-      navigate: (page) => set({ currentPage: page }),
-      setMode: (mode) => set({ mode }),
-      setAuthenticated: (val) => set({ isAuthenticated: val }),
-      setProfileOpen: (val) => set({ isProfileOpen: val }),
-      setSelectedTemplate: (t) => set({ selectedTemplate: t }),
-      setFilter: (filter) => set({ filter, templatePage: 0 }),
-      setTemplatePage: (page) => set({ templatePage: page }),
-      updateWizardData: (data) =>
-          set((state) => ({ wizardData: { ...state.wizardData, ...data } })),
-      toggleWizardPage: (page) =>
-          set((state) => ({
+      navigate: (page: any) => set({ currentPage: page }),
+      setMode: (mode: any) => set({ mode }),
+      setAuthenticated: (val: any) => set({ isAuthenticated: val }),
+      setProfileOpen: (val: any) => set({ isProfileOpen: val }),
+      setSelectedTemplate: (t: any) => set({ selectedTemplate: t }),
+      setFilter: (filter: any) => set({ filter, templatePage: 0 }),
+      setTemplatePage: (page: any) => set({ templatePage: page }),
+      updateWizardData: (data: any) =>
+          set((state: any) => ({ wizardData: { ...state.wizardData, ...data } })),
+      toggleWizardPage: (page: any) =>
+          set((state: any) => ({
               wizardData: {
                   ...state.wizardData,
                   pages: state.wizardData.pages.includes(page)
-                      ? state.wizardData.pages.filter((p) => p !== page)
+                      ? state.wizardData.pages.filter((p: any) => p !== page)
                       : [...state.wizardData.pages, page],
               },
           })),
-      setAiModels: (models) => set({ aiModels: models }),
-      setSelectedModel: (model) => set({ selectedModel: model }),
-      setOauthToken: (token) => set({ oauthToken: token }),
-      setProjectId: (id) => set({ projectId: id }),
-      setRefreshToken: (token) => set({ refreshToken: token }),
-      setUserName: (name) => set({ userName: name }),
-      setUserEmail: (email) => set({ userEmail: email }),
+      setAiModels: (models: any) => set({ aiModels: models }),
+      setSelectedModel: (model: any) => set({ selectedModel: model }),
+      setOauthToken: (token: any) => set({ oauthToken: token }),
+      setProjectId: (id: any) => set({ projectId: id }),
+      setRefreshToken: (token: any) => set({ refreshToken: token }),
+      setUserName: (name: string) => set({ userName: name }),
+      setUserEmail: (email: string) => set({ userEmail: email }),
     }),
     {
       name: 'vocacode-auth-storage',
-      partialize: (state) => ({
+      partialize: (state: AppState) => ({
         oauthToken: state.oauthToken,
         refreshToken: state.refreshToken,
         projectId: state.projectId,
@@ -176,4 +176,5 @@ export const useAppStore = create<AppState>()(
     }
   ) as any)
 )
+
 

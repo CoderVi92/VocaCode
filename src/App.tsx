@@ -278,7 +278,7 @@ export default function App() {
                       className="absolute top-10 left-0 w-80 bg-[#161920] border border-white/10 rounded-xl shadow-2xl py-2 z-[100]"
                     >
                       <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Pilih Model AI</p>
-                      {aiModels.map((model) => {
+                      {aiModels.map((model: any) => {
                         const isSelected = selectedModel?.id === model.id
                         return (
                           <div key={model.id} className="flex flex-col border-b border-white/5 last:border-0">
@@ -308,7 +308,7 @@ export default function App() {
                             {/* Thinking Tiers Options */}
                             {isSelected && model.tiers && model.tiers.length > 0 && (
                               <div className="flex flex-wrap gap-1.5 px-4 pb-3 pt-1 bg-indigo-600/5">
-                                {model.tiers.map((tier) => (
+                                {model.tiers.map((tier: any) => (
                                   <button
                                     key={tier.id}
                                     onClick={(e) => {
@@ -338,7 +338,7 @@ export default function App() {
 
             {/* Center — BASIC / ADVANCE Toggle */}
             <div className="absolute left-1/2 -translate-x-1/2 flex bg-black/40 rounded-full p-0.5 border border-white/5">
-              {(['BASIC', 'ADVANCE'] as const).map((m) => (
+              {(['BASIC', 'ADVANCE'] as const).map((m: any) => (
                 <button
                   key={m}
                   onClick={() => setMode(m)}
