@@ -132,8 +132,14 @@ export default function App() {
   return (
     <div className="min-h-screen bg-[#0b0d11] text-gray-300 font-sans flex flex-col select-none overflow-hidden relative">
 
+      {/* Drag Region — invisible bar across top of window for dragging */}
+      <div 
+        className="absolute top-0 left-0 right-0 h-10 z-[90]" 
+        data-tauri-drag-region 
+      />
+
       {/* Window Controls — top-right, Windows style */}
-      <div className="absolute top-0 right-0 p-2 flex items-center gap-0.5 z-[100]" data-tauri-drag-region>
+      <div className="absolute top-0 right-0 p-2 flex items-center gap-0.5 z-[100]">
         <div
           onClick={handleMinimize}
           className="p-1.5 hover:bg-white/5 rounded text-gray-600 hover:text-gray-300 cursor-pointer transition-colors"
