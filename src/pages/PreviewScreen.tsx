@@ -1,10 +1,12 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Zap, Terminal, Github, Send, Loader2, Bot } from 'lucide-react'
+import { Zap, Terminal, Github, Send, Loader2, Bot, Mic } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../lib/store'
 import ScreenWrapper from '../components/ScreenWrapper'
+import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 
 interface LogEntry {
     color: string
@@ -24,13 +26,63 @@ export default function PreviewScreen() {
     const oauthToken = useAppStore((s) => s.oauthToken)
     const projectId = useAppStore((s) => s.projectId)
     const selectedModel = useAppStore((s) => s.selectedModel)
+    const mode = useAppStore((s: any) => s.mode) // Poin: Kondisi BASIC
 
     const [aiInput, setAiInput] = useState('')
     const [aiResponse, setAiResponse] = useState('')
     const [isGenerating, setIsGenerating] = useState(false)
     const [logs, setLogs] = useState<LogEntry[]>(INITIAL_LOGS)
+    const [isListening, setIsListening] = useState(false)
     const logsRef = useRef<HTMLDivElement>(null)
     const responseRef = useRef<HTMLDivElement>(null)
+
+    // Poin 5: Multi-Turn Chat History (Khusus disimulasikan untuk mengingat konteks di BASIC)
+    const [chatHistory, setChatHistory] = useState<{role: string, text: string}[]>([])
+    // Poin 8 & 12: Representasi Error Ramah & Auto-Retry
+    const [errorState, setErrorState] = useState<{type: '403' | '429' | '500' | null, message: string, countdown?: number}>({ type: null, message: '' })
+
+    // Speech to Text logic
+    const handleToggleSpeech = () => {
+        const SpeechRecognitionInfo = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
+        if (!SpeechRecognitionInfo) {
+            addLog('text-yellow-500', '> browser Anda tidak mendukung Speech-to-Text.')
+            return
+        }
+        
+        if (isListening) return // Prevent duplicate
+
+        const recognition = new SpeechRecognitionInfo()
+        recognition.lang = 'id-ID' // Bahasa Indonesia
+        recognition.interimResults = false
+
+        recognition.onstart = () => {
+            setIsListening(true)
+            addLog('text-indigo-400', '> mikrofon aktif, silakan bicara...')
+        }
+
+        recognition.onresult = (event: any) => {
+            const transcript = event.results[0][0].transcript
+            
+            // Format sederhana seperti kamus server.cjs (contoh)
+            let formatted = transcript
+                .replace(/koma/gi, ',')
+                .replace(/titik/gi, '.')
+                .replace(/tanda tanya/gi, '?')
+                
+            setAiInput((prev) => prev ? prev + ' ' + formatted : formatted)
+            addLog('text-green-500', `> suara terekam: "${formatted}"`)
+        }
+
+        recognition.onerror = (event: any) => {
+            addLog('text-red-400', `> kesalahan mikrofon: ${event.error}`)
+        }
+
+        recognition.onend = () => {
+            setIsListening(false)
+        }
+
+        recognition.start()
+    }
 
     // Auto-scroll logs
     useEffect(() => {
@@ -65,6 +117,17 @@ export default function PreviewScreen() {
             ? `${selectedModel.displayName}${tierName ? ` (${tierName})` : ''}` 
             : modelId
 
+        let finalPrompt = prompt
+        if (mode === 'BASIC' && chatHistory.length > 0) {
+            // Poin 5: Konversi riwayat menjadi string tersambung sebelum melempar ke Rust (Jika tidak merubah struktur Rust backend)
+            // Di server.cjs ini disuntik ke array "contents". Karena API Tauri prompt berupa string, kita suntikkan riwayat secara tekstual
+            const historyText = chatHistory.map(h => `${h.role === 'user' ? 'User' : 'AI'}: ${h.text}`).join('\n\n')
+            finalPrompt = `Berikut adalah riwayat percakapan sebelumnya:\n${historyText}\n\nUser: ${prompt}`
+        }
+
+        // Poin 8: Mereset state error sebelum mencoba
+        if (mode === 'BASIC') setErrorState({ type: null, message: '' })
+
         addLog('text-indigo-400', `> mengirim instruksi ke ${modelName} ...`)
         addLog('text-gray-500', `> prompt: "${prompt.length > 60 ? prompt.slice(0, 60) + '...' : prompt}"`)
 
@@ -81,6 +144,16 @@ export default function PreviewScreen() {
             unlistenComplete = await listen('ai_complete', () => {
                 setIsGenerating(false)
                 addLog('text-green-500', '> response AI selesai.')
+                
+                if (mode === 'BASIC') {
+                    // Update Poin 5: Menyimpan ke riwayat percakapan khusus mode BASIC
+                    setChatHistory(prev => {
+                        let finalResponse = ''
+                        setAiResponse(curr => { finalResponse = curr; return curr })
+                        return [...prev, { role: 'user', text: prompt }, { role: 'model', text: finalResponse }]
+                    })
+                }
+
                 // Cleanup listeners
                 unlistenChunk?.()
                 unlistenComplete?.()
@@ -101,13 +174,40 @@ export default function PreviewScreen() {
                 token: oauthToken || '',
                 projectId: projectId || '',
                 model: modelId,
-                prompt: prompt,
+                prompt: finalPrompt,
             })
 
         } catch (err: any) {
             setIsGenerating(false)
             const errorMsg = typeof err === 'string' ? err : err?.message || 'Unknown error'
             addLog('text-red-400', `> gagal menghubungi AI: ${errorMsg}`)
+
+            // Poin 8 & 12: Deteksi Spesifik Error Khusus mode BASIC
+            if (mode === 'BASIC') {
+                if (errorMsg.includes('Akses ditolak') || errorMsg.includes('403')) {
+                    setErrorState({ type: '403', message: 'Akun Anda kemungkinan membutuhkan Verifikasi Nomor HP di Google Cloud Console.' })
+                } else if (errorMsg.includes('429') || errorMsg.includes('Terlalu banyak permintaan')) {
+                    // Poin 12: Mekanisme Auto-Retry
+                    addLog('text-yellow-400', '> mendeteksi limit 429/503. Mengaktifkan auto-retry (Poin 12)...')
+                    let countdown = 3
+                    setErrorState({ type: '429', message: 'Teguran Rate Limit diterima. Server akan mencoba mengetuk ulang secara otomatis.', countdown: countdown })
+                    
+                    const interval = setInterval(() => {
+                        countdown -= 1
+                        setErrorState(prev => ({ ...prev, countdown }))
+                        if (countdown <= 0) {
+                            clearInterval(interval)
+                            // Auto Retry Action (Poin 12)
+                            setErrorState({ type: null, message: '' })
+                            addLog('text-indigo-400', '> Auto-retry trigger dieksekusi.')
+                            setAiInput(prompt) // Mengembalikan prompt
+                            setTimeout(() => document.getElementById('btn-send-prompt')?.click(), 500)
+                        }
+                    }, 1000)
+                } else if (errorMsg.includes('Internal') || errorMsg.includes('500') || errorMsg.includes('kapasitas batas nalar')) {
+                    setErrorState({ type: '500', message: 'Limitasi pikiran model melampaui kapasitas server Google. Coba turunkan tingkat pikiran.' })
+                }
+            }
 
             // Cleanup listeners on error
             unlistenChunk?.()
@@ -181,15 +281,25 @@ export default function PreviewScreen() {
                     <p className="text-[10px] text-gray-500 leading-relaxed">
                         Kirim instruksi ke AI untuk memodifikasi website. Tekan Enter untuk mengirim.
                     </p>
-                    <textarea
-                        value={aiInput}
-                        onChange={(e) => setAiInput(e.target.value)}
-                        onKeyDown={handleKeyDown}
-                        disabled={isGenerating}
-                        className="w-full bg-black/40 border border-white/10 rounded-lg p-3 text-xs outline-none focus:border-indigo-500 h-24 transition-colors resize-none text-gray-300 placeholder:text-gray-600 disabled:opacity-50"
-                        placeholder="Misal: Ubah section hero jadi warna biru muda..."
-                    />
+                    <div className="relative">
+                        <textarea
+                            value={aiInput}
+                            onChange={(e) => setAiInput(e.target.value)}
+                            onKeyDown={handleKeyDown}
+                            disabled={isGenerating}
+                            className="w-full bg-black/40 border border-white/10 rounded-lg p-3 pr-10 text-xs outline-none focus:border-indigo-500 h-24 transition-colors resize-none text-gray-300 placeholder:text-gray-600 disabled:opacity-50"
+                            placeholder="Misal: Ubah section hero jadi warna biru muda..."
+                        />
+                        <button
+                            onClick={handleToggleSpeech}
+                            className={`absolute right-2 bottom-3 p-1.5 rounded-full transition-colors ${isListening ? 'bg-red-500/20 text-red-500 animate-pulse' : 'bg-white/5 text-gray-500 hover:text-indigo-400'}`}
+                            title="Dikte Suara (Voice to Text)"
+                        >
+                            <Mic size={14} />
+                        </button>
+                    </div>
                     <button
+                        id="btn-send-prompt"
                         onClick={handleSendPrompt}
                         disabled={isGenerating || !aiInput.trim()}
                         className={`w-full py-2 rounded-lg text-xs font-bold transition-all active:scale-95 flex items-center justify-center gap-2 cursor-pointer ${isGenerating || !aiInput.trim()
@@ -211,6 +321,43 @@ export default function PreviewScreen() {
                     </button>
                 </div>
 
+                {/* UI Error Khusus Mode BASIC (Poin 8 & 12) */}
+                <AnimatePresence>
+                    {mode === 'BASIC' && errorState.type && (
+                        <motion.div
+                            initial={{ opacity: 0, scale: 0.95 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            exit={{ opacity: 0, scale: 0.95 }}
+                            className={`p-4 rounded-xl border flex flex-col gap-2 shadow-xl ${
+                                errorState.type === '403' ? 'bg-red-500/10 border-red-500/30' :
+                                errorState.type === '429' ? 'bg-yellow-500/10 border-yellow-500/30' :
+                                'bg-orange-500/10 border-orange-500/30'
+                            }`}
+                        >
+                            <span className="text-[10px] font-bold uppercase tracking-widest text-white px-2 py-0.5 rounded bg-black/40 w-fit">
+                                {errorState.type === '403' ? 'AKUN MEMBUTUHKAN VERIFIKASI (403)' : 
+                                 errorState.type === '429' ? 'SERVER SIBUK - AUTO RETRY (429/503)' : 'KESALAHAN PARAMETER (500)'}
+                            </span>
+                            <p className="text-xs text-gray-300 leading-relaxed">
+                                {errorState.message}
+                            </p>
+                            
+                            {errorState.type === '403' && (
+                                <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer" className="mt-2 block w-full text-center py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-[11px] font-bold cursor-pointer transition-colors">
+                                    Buka Google Cloud Console
+                                </a>
+                            )}
+                            
+                            {errorState.type === '429' && errorState.countdown !== undefined && (
+                                <div className="mt-2 w-full py-2 bg-yellow-500/20 rounded-lg flex items-center justify-center gap-2">
+                                    <Loader2 size={14} className="animate-spin text-yellow-400" />
+                                    <span className="text-xs font-bold text-yellow-500">Mencoba otomatis dalam {errorState.countdown} detik...</span>
+                                </div>
+                            )}
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
                 {/* AI Response Panel */}
                 <AnimatePresence>
                     {aiResponse && (
@@ -227,12 +374,9 @@ export default function PreviewScreen() {
                             </div>
                             <div
                                 ref={responseRef}
-                                className="p-4 max-h-48 overflow-y-auto"
-                            >
-                                <pre className="text-[11px] text-gray-300 whitespace-pre-wrap font-mono leading-relaxed">
-                                    {aiResponse}
-                                </pre>
-                            </div>
+                                className="p-4 max-h-48 overflow-y-auto w-full prose prose-invert prose-sm"
+                                dangerouslySetInnerHTML={{ __html: aiResponse ? DOMPurify.sanitize(marked.parse(aiResponse) as string) : '' }}
+                            />
                         </motion.div>
                     )}
                 </AnimatePresence>

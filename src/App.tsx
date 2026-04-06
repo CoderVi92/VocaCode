@@ -13,6 +13,7 @@ import LoadingScreen from './pages/LoadingScreen'
 import ExplorerScreen from './pages/ExplorerScreen'
 import WizardScreen from './pages/WizardScreen'
 import PreviewScreen from './pages/PreviewScreen'
+import { refreshAccessTokenBasicSafe } from './lib/auth-basic'
 
 // Tauri window API — will fail gracefully in browser
 let appWindow: any = null
@@ -115,22 +116,29 @@ export default function App() {
       // Jika refreshToken ada (dari localStorage Zustand persist), coba refresh
       if (store.refreshToken) {
         try {
-          // Refresh access token via backend Tauri Rust
-          const rawJson: string = await invoke('refresh_access_token', {
-            refreshToken: store.refreshToken
-          })
-          const result = JSON.parse(rawJson)
+          let accessToken = ''
           
-          if (result.access_token) {
+          if (store.mode === 'BASIC') {
+              // Poin 1: Gunakan antrean pelindung antilompatan balik khusus mode BASIC
+              accessToken = await refreshAccessTokenBasicSafe(store.refreshToken)
+          } else {
+              // Modus ADVANCE normal via invoke mentah Tauri
+              const rawJson: string = await invoke('refresh_access_token', {
+                refreshToken: store.refreshToken
+              })
+              accessToken = JSON.parse(rawJson).access_token
+          }
+          
+          if (accessToken) {
             useAppStore.setState({ 
-              oauthToken: result.access_token,
+              oauthToken: accessToken,
               isAuthenticated: true 
             })
             // Fetch kuota terbaru
             if (store.projectId) {
                try {
                  const models: any = await invoke('fetch_gemini_models_with_quota', {
-                   accessToken: result.access_token,
+                   accessToken: accessToken,
                    projectId: store.projectId
                  })
                  useAppStore.setState({ aiModels: models })
