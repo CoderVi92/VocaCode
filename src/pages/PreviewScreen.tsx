@@ -7,6 +7,7 @@ import { useAppStore } from '../lib/store'
 import ScreenWrapper from '../components/ScreenWrapper'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { refreshAccessTokenBasicSafe } from '../lib/auth-basic'
 
 interface LogEntry {
     color: string
@@ -117,16 +118,19 @@ export default function PreviewScreen() {
             ? `${selectedModel.displayName}${tierName ? ` (${tierName})` : ''}` 
             : modelId
 
-        let finalPrompt = prompt
-        if (mode === 'BASIC' && chatHistory.length > 0) {
-            // Poin 5: Konversi riwayat menjadi string tersambung sebelum melempar ke Rust (Jika tidak merubah struktur Rust backend)
-            // Di server.cjs ini disuntik ke array "contents". Karena API Tauri prompt berupa string, kita suntikkan riwayat secara tekstual
-            const historyText = chatHistory.map(h => `${h.role === 'user' ? 'User' : 'AI'}: ${h.text}`).join('\n\n')
-            finalPrompt = `Berikut adalah riwayat percakapan sebelumnya:\n${historyText}\n\nUser: ${prompt}`
-        }
-
         // Poin 8: Mereset state error sebelum mencoba
         if (mode === 'BASIC') setErrorState({ type: null, message: '' })
+
+        // Poin 1 & Complexity: Pastikan token segar sebelum mengirim (seperti server.cjs)
+        let activeToken = oauthToken || ''
+        if (mode === 'BASIC' && oauthToken) {
+            try {
+                activeToken = await refreshAccessTokenBasicSafe(oauthToken)
+                useAppStore.setState({ oauthToken: activeToken })
+            } catch (e) {
+                console.error("Token refresh failed before chat", e)
+            }
+        }
 
         addLog('text-indigo-400', `> mengirim instruksi ke ${modelName} ...`)
         addLog('text-gray-500', `> prompt: "${prompt.length > 60 ? prompt.slice(0, 60) + '...' : prompt}"`)
@@ -169,12 +173,13 @@ export default function PreviewScreen() {
                 unlistenError?.()
             })
 
-            // Invoke backend command with selected model
+            // Poin 5 & Complexity: Kirim chatHistory yang sebenarnya (bukan gabungan string hack)
             await invoke('execute_model_prompt', {
-                token: oauthToken || '',
+                token: activeToken,
                 projectId: projectId || '',
                 model: modelId,
-                prompt: finalPrompt,
+                prompt: prompt,
+                history: chatHistory, // Mengirim Vec<ChatMessage> ke Rust
             })
 
         } catch (err: any) {

@@ -401,20 +401,17 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             ]),
         },
         AntigravityModel {
-            id: "gemini-3-flash".into(),
-            name: "gemini-3-flash".into(),
+            id: "gemini-3-flash-agent".into(),
+            name: "gemini-3-flash-agent".into(),
             display_name: "Gemini 3 Flash".into(),
             description: "Fast and versatile model for everyday tasks".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_536,
             source: "antigravity".into(),
             quota_percent: None,
-            selected_tier_id: Some("gemini-3-flash-minimal".into()),
+            selected_tier_id: Some("gemini-3-flash-agent".into()),
             tiers: Some(vec![
-                AiModelTier { id: "gemini-3-flash-minimal".into(), name: "Minimal Thinking".into() },
-                AiModelTier { id: "gemini-3-flash-low".into(), name: "Low Thinking".into() },
-                AiModelTier { id: "gemini-3-flash-medium".into(), name: "Medium Thinking".into() },
-                AiModelTier { id: "gemini-3-flash-high".into(), name: "High Thinking".into() },
+                AiModelTier { id: "gemini-3-flash-agent".into(), name: "Standard Thinking".into() },
             ]),
         },
         AntigravityModel {
@@ -558,9 +555,15 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
 }
 
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct ChatMessage {
+    role: String,
+    text: String,
+}
+
 // ── Execute Model Prompt — Non-streaming with retry (matching server.cjs chatWithModelRetry) ──
 #[tauri::command]
-async fn execute_model_prompt(app: AppHandle, token: String, project_id: String, model: String, prompt: String) -> Result<(), String> {
+async fn execute_model_prompt(app: AppHandle, token: String, project_id: String, model: String, prompt: String, history: Vec<ChatMessage>) -> Result<(), String> {
     let effective_project = if project_id.trim().is_empty() {
         DEFAULT_PROJECT_ID.to_string()
     } else {
@@ -568,11 +571,27 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
     };
 
     // Body persis seperti server.cjs chatWithModel (tanpa properti thinkingConfig, biarkan API server-side parse -high otomatis)
+    // Poin 5: Multi-Turn Chat (Konstruksi Array Contents)
+    let mut contents = Vec::new();
+    for msg in history {
+        // Map "user" -> "user", "ai/assistant" -> "model" (Google specific)
+        let role = if msg.role == "user" { "user" } else { "model" };
+        contents.push(serde_json::json!({
+            "role": role,
+            "parts": [{ "text": msg.text }]
+        }));
+    }
+    // Terakhir masukkan prompt saat ini
+    contents.push(serde_json::json!({
+        "role": "user",
+        "parts": [{ "text": prompt }]
+    }));
+
     let payload = serde_json::json!({
         "project": effective_project,
         "model": model,
         "request": {
-            "contents": [{ "role": "user", "parts": [{ "text": prompt }] }]
+            "contents": contents
         }
     });
 
@@ -620,7 +639,14 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
             );
             
             if status >= 200 && status < 300 {
-                if let Ok(data) = serde_json::from_str::<Value>(&err_text) {
+                if let Ok(mut data) = serde_json::from_str::<Value>(&err_text) {
+                    // Poin 10 Complexity: Handle jika API mengembalikan ARRAY of chunks (server.cjs baris 527)
+                    if let Some(arr) = data.as_array() {
+                        if !arr.is_empty() {
+                            // Ambil chunk terakhir sebagai data utama
+                            data = arr.last().cloned().unwrap_or(data);
+                        }
+                    }
                     response_data = Some(data);
                     success = true;
                     break;
