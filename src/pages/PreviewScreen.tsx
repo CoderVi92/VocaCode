@@ -204,8 +204,11 @@ export default function PreviewScreen() {
                             setTimeout(() => document.getElementById('btn-send-prompt')?.click(), 500)
                         }
                     }, 1000)
-                } else if (errorMsg.includes('Internal') || errorMsg.includes('500') || errorMsg.includes('kapasitas batas nalar')) {
-                    setErrorState({ type: '500', message: 'Limitasi pikiran model melampaui kapasitas server Google. Coba turunkan tingkat pikiran.' })
+                } else if (errorMsg.includes('404') || errorMsg.includes('NOT_FOUND') || errorMsg.includes('entity was not found')) {
+                    // Poin 8 Refinement: Deteksi Project / Model ID tidak ditemukan
+                    setErrorState({ type: '500', message: 'Project ID atau Model ID tidak ditemukan (404). Pastikan Project ID aktif di Google Cloud Console dan Model tersedia di endpoint ini.' })
+                } else if (errorMsg.includes('Internal') || errorMsg.includes('500') || errorMsg.includes('kapasitas batas nalar') || errorMsg.includes('limit')) {
+                    setErrorState({ type: '500', message: 'Limitasi pikiran model melampaui kapasitas server Google. Coba turunkan tingkat pikiran atau cek kuota harian.' })
                 }
             }
 
