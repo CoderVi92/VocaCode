@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Zap, Terminal, Github, Send, Loader2, Bot, Mic } from 'lucide-react'
+import { Zap, Terminal, Github, Send, Loader2, Bot, Mic, Paperclip, X } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../lib/store'
@@ -8,10 +8,17 @@ import ScreenWrapper from '../components/ScreenWrapper'
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { refreshAccessTokenBasicSafe } from '../lib/auth-basic'
+import { logger } from '../lib/logger'
 
 interface LogEntry {
     color: string
     text: string
+}
+
+interface Attachment {
+    name: string
+    mime_type: string
+    data: string
 }
 
 const INITIAL_LOGS: LogEntry[] = [
@@ -36,11 +43,18 @@ export default function PreviewScreen() {
     const [isListening, setIsListening] = useState(false)
     const logsRef = useRef<HTMLDivElement>(null)
     const responseRef = useRef<HTMLDivElement>(null)
+    const fileInputRef = useRef<HTMLInputElement>(null)
 
     // Poin 5: Multi-Turn Chat History (Khusus disimulasikan untuk mengingat konteks di BASIC)
     const [chatHistory, setChatHistory] = useState<{role: string, text: string}[]>([])
     // Poin 8 & 12: Representasi Error Ramah & Auto-Retry
     const [errorState, setErrorState] = useState<{type: '403' | '429' | '500' | null, message: string, countdown?: number}>({ type: null, message: '' })
+    
+    // Fitur 6: Attachments
+    const [attachments, setAttachments] = useState<Attachment[]>([])
+
+    // Fitur 7: Voice-to-Text (Realtime + Punctuation)
+    const [interimSpeech, setInterimSpeech] = useState('')
 
     // Speech to Text logic
     const handleToggleSpeech = () => {
@@ -54,24 +68,40 @@ export default function PreviewScreen() {
 
         const recognition = new SpeechRecognitionInfo()
         recognition.lang = 'id-ID' // Bahasa Indonesia
-        recognition.interimResults = false
+        recognition.interimResults = true // Poin: Interim Real-time
 
         recognition.onstart = () => {
             setIsListening(true)
+            setInterimSpeech('')
             addLog('text-indigo-400', '> mikrofon aktif, silakan bicara...')
         }
 
         recognition.onresult = (event: any) => {
-            const transcript = event.results[0][0].transcript
-            
-            // Format sederhana seperti kamus server.cjs (contoh)
-            let formatted = transcript
-                .replace(/koma/gi, ',')
-                .replace(/titik/gi, '.')
-                .replace(/tanda tanya/gi, '?')
+            let interim = ''
+            let isFinal = false
+            for (let i = event.resultIndex; i < event.results.length; ++i) {
+                let chunk = event.results[i][0].transcript
                 
-            setAiInput((prev) => prev ? prev + ' ' + formatted : formatted)
-            addLog('text-green-500', `> suara terekam: "${formatted}"`)
+                // Fitur 7: Punctuation Engine Sederhana
+                chunk = chunk
+                    .replace(/koma/gi, ',')
+                    .replace(/titik/gi, '.')
+                    .replace(/tanda tanya/gi, '?')
+
+                if (event.results[i].isFinal) {
+                    isFinal = true
+                    setAiInput((prev) => prev ? prev + ' ' + chunk : chunk)
+                    addLog('text-green-500', `> suara terekam: "${chunk}"`)
+                } else {
+                    interim += chunk
+                }
+            }
+            
+            if (isFinal) {
+                setInterimSpeech('') // Reset interim when final
+            } else {
+                setInterimSpeech(interim)
+            }
         }
 
         recognition.onerror = (event: any) => {
@@ -85,6 +115,49 @@ export default function PreviewScreen() {
         recognition.start()
     }
 
+    const processFile = (file: File) => {
+        const isImage = file.type.startsWith('image/')
+        const isVideo = file.type.startsWith('video/')
+        const allowedMap = selectedModel?.supportedMimeTypes || []
+        
+        let isSupported = false
+        if (isImage && selectedModel?.supportsImages) isSupported = true
+        else if (isVideo && selectedModel?.supportsVideo) isSupported = true
+        else if (allowedMap.includes(file.type)) isSupported = true
+
+        if (!isSupported) {
+            addLog('text-red-400', `> File ${file.name} (Tipe: ${file.type || 'unknown'}) tidak didukung oleh model AI ini.`)
+            return
+        }
+
+        const reader = new FileReader()
+        reader.onload = () => {
+            const result = reader.result as string
+            const base64Data = result.split(',')[1]
+            setAttachments(prev => [...prev, {
+                name: file.name,
+                mime_type: file.type,
+                data: base64Data
+            }])
+            addLog('text-blue-400', `> Lampiran ditambahkan: ${file.name}`)
+        }
+        reader.readAsDataURL(file)
+    }
+
+    const handlePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+        if (e.clipboardData.files && e.clipboardData.files.length > 0) {
+            e.preventDefault()
+            Array.from(e.clipboardData.files).forEach(processFile)
+        }
+    }
+
+    const handleFileSelected = (e: React.ChangeEvent<HTMLInputElement>) => {
+        if (e.target.files && e.target.files.length > 0) {
+            Array.from(e.target.files).forEach(processFile)
+        }
+        e.target.value = ''
+    }
+
     // Auto-scroll logs
     useEffect(() => {
         if (logsRef.current) logsRef.current.scrollTop = logsRef.current.scrollHeight
@@ -95,9 +168,29 @@ export default function PreviewScreen() {
         if (responseRef.current) responseRef.current.scrollTop = responseRef.current.scrollHeight
     }, [aiResponse])
 
+    // Fitur 11: Logging System — Persist + Filter
+    const VERBOSE_KEYWORDS = ['endpoint', 'HTTP', 'raw', 'payload', 'bearer', 'header', 'Content-Type']
+
     const addLog = (color: string, text: string) => {
+        // Selalu persist ke file log (Desktop/vocacode-debug.log)
+        logger.info('SYSTEM-LOG', 'Chat', text)
+
+        // Di BASIC, sembunyikan log teknis dari panel UI
+        if (mode === 'BASIC' && VERBOSE_KEYWORDS.some(kw => text.toLowerCase().includes(kw.toLowerCase()))) {
+            return // Tidak tampil di UI, tapi sudah tersimpan di file
+        }
+
         setLogs((prev) => [...prev, { color, text }])
     }
+
+    // Fitur 12: Session Management — Auto reset chat history per model
+    useEffect(() => {
+        if (mode === 'BASIC') {
+            setChatHistory([])
+            setAiResponse('')
+            setLogs((prev) => [...prev, { color: 'text-gray-500', text: `> riwayat obrolan dibersihkan untuk model: ${selectedModel?.displayName || 'baru'}` }])
+        }
+    }, [selectedModel?.id, mode])
 
     const handleSendPrompt = async () => {
         const prompt = aiInput.trim()
@@ -123,10 +216,11 @@ export default function PreviewScreen() {
 
         // Poin 1 & Complexity: Pastikan token segar sebelum mengirim (seperti server.cjs)
         let activeToken = oauthToken || ''
-        if (mode === 'BASIC' && oauthToken) {
+        const refreshToken = useAppStore.getState().refreshToken
+
+        if (mode === 'BASIC' && refreshToken) {
             try {
-                activeToken = await refreshAccessTokenBasicSafe(oauthToken)
-                useAppStore.setState({ oauthToken: activeToken })
+                activeToken = await refreshAccessTokenBasicSafe(refreshToken)
             } catch (e) {
                 console.error("Token refresh failed before chat", e)
             }
@@ -158,6 +252,8 @@ export default function PreviewScreen() {
                     })
                 }
 
+                setAttachments([]) // Remove attachments when chat succeeds
+
                 // Cleanup listeners
                 unlistenChunk?.()
                 unlistenComplete?.()
@@ -173,13 +269,18 @@ export default function PreviewScreen() {
                 unlistenError?.()
             })
 
+            const selectedTier = selectedModel?.tiers?.find(t => t.id === modelId)
+            const thinkingBudget = selectedTier?.budget || undefined
+
             // Poin 5 & Complexity: Kirim chatHistory yang sebenarnya (bukan gabungan string hack)
             await invoke('execute_model_prompt', {
                 token: activeToken,
                 projectId: projectId || '',
-                model: modelId,
+                model: selectedModel?.id || modelId, // Override modelId with base model id if valid
                 prompt: prompt,
                 history: chatHistory, // Mengirim Vec<ChatMessage> ke Rust
+                thinkingBudget: thinkingBudget, // Mengirim budget integer ke API
+                attachments: attachments.length > 0 ? attachments : null
             })
 
         } catch (err: any) {
@@ -211,9 +312,10 @@ export default function PreviewScreen() {
                     }, 1000)
                 } else if (errorMsg.includes('404') || errorMsg.includes('NOT_FOUND') || errorMsg.includes('entity was not found')) {
                     // Poin 8 Refinement: Deteksi Project / Model ID tidak ditemukan
-                    setErrorState({ type: '500', message: 'Project ID atau Model ID tidak ditemukan (404). Pastikan Project ID aktif di Google Cloud Console dan Model tersedia di endpoint ini.' })
-                } else if (errorMsg.includes('Internal') || errorMsg.includes('500') || errorMsg.includes('kapasitas batas nalar') || errorMsg.includes('limit')) {
-                    setErrorState({ type: '500', message: 'Limitasi pikiran model melampaui kapasitas server Google. Coba turunkan tingkat pikiran atau cek kuota harian.' })
+                    setErrorState({ type: '500', message: 'Project ID atau Model ID tidak ditemukan (404). Pastikan Model terpilih tersedia pada akun Anda.' })
+                } else if (errorMsg.includes('503') || errorMsg.includes('500') || errorMsg.includes('sedang penuh') || errorMsg.includes('kapasitas') || errorMsg.includes('habis')) {
+                    // Poin 8: 503 Capacity & 500 Thinking Solution
+                    setErrorState({ type: '500', message: 'Model berkapasitas penuh atau kuota terlampaui. Solusi: Ubah "Perencanaan" ke tingkat yang lebih rendah atau ganti Model AI lain.' })
                 }
             }
 
@@ -294,17 +396,48 @@ export default function PreviewScreen() {
                             value={aiInput}
                             onChange={(e) => setAiInput(e.target.value)}
                             onKeyDown={handleKeyDown}
+                            onPaste={handlePaste}
                             disabled={isGenerating}
-                            className="w-full bg-black/40 border border-white/10 rounded-lg p-3 pr-10 text-xs outline-none focus:border-indigo-500 h-24 transition-colors resize-none text-gray-300 placeholder:text-gray-600 disabled:opacity-50"
+                            className={`w-full bg-black/40 border border-white/10 rounded-lg p-3 pr-10 text-xs outline-none focus:border-indigo-500 h-24 transition-colors resize-none text-gray-300 placeholder:text-gray-600 disabled:opacity-50 ${attachments.length > 0 ? 'pb-8' : ''}`}
                             placeholder="Misal: Ubah section hero jadi warna biru muda..."
                         />
-                        <button
-                            onClick={handleToggleSpeech}
-                            className={`absolute right-2 bottom-3 p-1.5 rounded-full transition-colors ${isListening ? 'bg-red-500/20 text-red-500 animate-pulse' : 'bg-white/5 text-gray-500 hover:text-indigo-400'}`}
-                            title="Dikte Suara (Voice to Text)"
-                        >
-                            <Mic size={14} />
-                        </button>
+                        {interimSpeech && (
+                            <div className="absolute top-2 right-12 bg-[#1e2330]/90 backdrop-blur-sm border border-indigo-500/30 text-indigo-300 text-[10px] px-2 py-1 rounded pointer-events-none animate-pulse max-w-[200px] truncate">
+                                {interimSpeech}
+                            </div>
+                        )}
+                        
+                        {/* Multi-file Accumulate Badge (Fitur 6) */}
+                        {attachments.length > 0 && (
+                            <div className="absolute left-3 bottom-3 flex gap-2">
+                                {attachments.map((att, idx) => (
+                                    <div key={idx} className="flex items-center gap-1 bg-indigo-500/20 text-indigo-300 text-[9px] px-2 py-0.5 rounded border border-indigo-500/30">
+                                        <span className="truncate max-w-[60px]">{att.name}</span>
+                                        <button onClick={() => setAttachments(prev => prev.filter((_, i) => i !== idx))} className="hover:text-red-400 transition-colors"><X size={10} /></button>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+
+                        <div className="absolute right-2 bottom-2 flex flex-col gap-1">
+                            {/* File Picker Picker (Fitur 6) */}
+                            <button
+                                onClick={() => fileInputRef.current?.click()}
+                                className="p-1 rounded bg-white/5 text-gray-500 hover:text-indigo-400 transition-colors flex items-center justify-center mx-auto"
+                                title="Lampirkan File"
+                            >
+                                <Paperclip size={12} />
+                            </button>
+                            <input type="file" ref={fileInputRef} hidden multiple onChange={handleFileSelected} />
+
+                            <button
+                                onClick={handleToggleSpeech}
+                                className={`p-1 flex items-center justify-center rounded transition-colors ${isListening ? 'bg-red-500/20 text-red-500 animate-pulse' : 'bg-white/5 text-gray-500 hover:text-indigo-400'}`}
+                                title="Dikte Suara (Voice to Text)"
+                            >
+                                <Mic size={14} />
+                            </button>
+                        </div>
                     </div>
                     <button
                         id="btn-send-prompt"
@@ -396,7 +529,8 @@ export default function PreviewScreen() {
                         <Terminal size={12} className="text-gray-700" />
                     </div>
                     <div ref={logsRef} className="flex-1 font-mono text-[9px] space-y-1.5 overflow-y-auto pr-1">
-                        {logs.map((log, i) => (
+                        {/* Fitur 11: BASIC hanya tampilkan 10 log terakhir */}
+                        {(mode === 'BASIC' ? logs.slice(-10) : logs).map((log, i) => (
                             <motion.p
                                 key={`${i}-${log.text.slice(0, 20)}`}
                                 initial={{ opacity: 0, x: -8 }}

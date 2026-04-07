@@ -46,6 +46,9 @@ export default function App() {
   const setSelectedModel = useAppStore((s: any) => s.setSelectedModel)
   const userName = useAppStore((s: any) => s.userName)
   const userEmail = useAppStore((s: any) => s.userEmail)
+  const isAuthenticated = useAppStore((s: any) => s.isAuthenticated)
+  const projectId = useAppStore((s: any) => s.projectId)
+  const refreshToken = useAppStore((s: any) => s.refreshToken)
   const profileRef = useRef<HTMLDivElement>(null)
   const [appVersion, setAppVersion] = useState('...')
 
@@ -119,14 +122,21 @@ export default function App() {
           let accessToken = ''
           
           if (store.mode === 'BASIC') {
-              // Poin 1: Gunakan antrean pelindung antilompatan balik khusus mode BASIC
+              // Poin 2: Gunakan antrean pelindung + cek expiresAt khusus mode BASIC
               accessToken = await refreshAccessTokenBasicSafe(store.refreshToken)
+              // tokenExpiresAt sudah di-update oleh refreshAccessTokenBasicSafe
           } else {
               // Modus ADVANCE normal via invoke mentah Tauri
               const rawJson: string = await invoke('refresh_access_token', {
                 refreshToken: store.refreshToken
               })
-              accessToken = JSON.parse(rawJson).access_token
+              const result = JSON.parse(rawJson)
+              accessToken = result.access_token
+              // Set expiresAt untuk mode ADVANCE juga (buffer 30s)
+              const expiresIn = result.expires_in || 3599
+              useAppStore.setState({ 
+                tokenExpiresAt: Date.now() + (expiresIn * 1000) - 30000
+              })
           }
           
           if (accessToken) {
@@ -155,11 +165,12 @@ export default function App() {
           }
         } catch (e) {
            console.error("Auto login gagal (refresh token expired): ", e)
-           // Bersihkan sesi jika refresh gagal
+           // Bersihkan sesi jika refresh gagal (termasuk tokenExpiresAt)
            useAppStore.setState({ 
              isAuthenticated: false, 
              oauthToken: null, 
              refreshToken: null, 
+             tokenExpiresAt: null,
              projectId: null,
              aiModels: [],
              selectedModel: null
@@ -177,6 +188,9 @@ export default function App() {
   const [isModelSelectorOpen, setModelSelectorOpen] = useState(false)
   const modelSelectorRef = useRef<HTMLDivElement>(null)
 
+  const [isThinkingSelectorOpen, setThinkingSelectorOpen] = useState(false)
+  const thinkingSelectorRef = useRef<HTMLDivElement>(null)
+
   // Close dropdowns on outside click
   useEffect(() => {
     const handler = (e: MouseEvent) => {
@@ -186,10 +200,46 @@ export default function App() {
       if (modelSelectorRef.current && !modelSelectorRef.current.contains(e.target as Node)) {
         setModelSelectorOpen(false)
       }
+      if (thinkingSelectorRef.current && !thinkingSelectorRef.current.contains(e.target as Node)) {
+        setThinkingSelectorOpen(false)
+      }
     }
     document.addEventListener('mousedown', handler)
     return () => document.removeEventListener('mousedown', handler)
   }, [setProfileOpen])
+
+  // Polling Kuota setiap 60 detik (Fitur 4) -> Tersembunyi (Tidak ada UI Timer) di BASIC
+  useEffect(() => {
+    if (!isAuthenticated || !projectId || !refreshToken) return
+
+    const pollQuota = async () => {
+      try {
+        const activeToken = await refreshAccessTokenBasicSafe(refreshToken)
+        const models: any = await invoke('fetch_gemini_models_with_quota', {
+          accessToken: activeToken,
+          projectId: projectId
+        })
+        
+        useAppStore.setState({ aiModels: models })
+        
+        // Update selectedModel if its quota changed
+        const currentSelectedId = useAppStore.getState().selectedModel?.id
+        if (currentSelectedId) {
+          const updatedModel = models.find((m: any) => m.id === currentSelectedId)
+          if (updatedModel) {
+            useAppStore.setState({ 
+              selectedModel: { ...updatedModel, selectedTierId: useAppStore.getState().selectedModel?.selectedTierId } 
+            })
+          }
+        }
+      } catch (e) {
+        logger.error('APP', 'PollQuota', 'Gagal memanggil quota: ' + e)
+      }
+    }
+
+    const interval = setInterval(pollQuota, 60000)
+    return () => clearInterval(interval)
+  }, [isAuthenticated, projectId, refreshToken])
 
   // Window control handlers
   const handleMinimize = async () => {
@@ -255,6 +305,59 @@ export default function App() {
                 <span className="font-bold text-[10px] text-white uppercase tracking-tighter leading-none">VC</span>
               </div>
 
+              {/* Thinking / Perencanaan Selector (BASIC Khusus) */}
+              {mode === 'BASIC' && selectedModel?.tiers && selectedModel.tiers.length > 0 && (
+                <div className="relative" ref={thinkingSelectorRef}>
+                  <div
+                    onClick={() => setThinkingSelectorOpen(!isThinkingSelectorOpen)}
+                    className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors"
+                  >
+                    <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
+                      <span className="group-hover:text-gray-200 transition-colors">Perencanaan</span>
+                    </div>
+                    <div className="h-3 w-px bg-white/10 mx-3" />
+                    <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
+                      <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
+                        {selectedModel.tiers.find((t: any) => t.id === selectedModel.selectedTierId)?.name || 'Default'}
+                      </span>
+                      <ChevronDown size={11} className={`text-gray-500 transition-transform duration-200 ${isThinkingSelectorOpen ? 'rotate-180' : ''}`} />
+                    </div>
+                  </div>
+
+                  <AnimatePresence>
+                    {isThinkingSelectorOpen && (
+                      <motion.div
+                        initial={{ opacity: 0, y: -6, scale: 0.97 }}
+                        animate={{ opacity: 1, y: 0, scale: 1 }}
+                        exit={{ opacity: 0, y: -6, scale: 0.97 }}
+                        transition={{ duration: 0.15, ease: 'easeOut' }}
+                        className="absolute top-10 left-0 w-48 bg-[#161920] border border-white/10 rounded-xl shadow-2xl py-2 z-[100]"
+                      >
+                        <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Tingkat Berpikir</p>
+                        {selectedModel.tiers.map((tier: any) => {
+                          const isSelected = selectedModel.selectedTierId === tier.id
+                          return (
+                            <button
+                              key={tier.id}
+                              onClick={() => {
+                                setSelectedModel({ ...selectedModel, selectedTierId: tier.id } as any)
+                                setThinkingSelectorOpen(false)
+                              }}
+                              className={`w-full flex items-center justify-between px-4 py-2 transition-colors text-left ${
+                                isSelected ? 'bg-indigo-600/10 text-indigo-300' : 'text-gray-300 hover:bg-white/5'
+                              }`}
+                            >
+                              <span className="text-[11px] font-bold">{tier.name}</span>
+                              {isSelected && <CheckCircle2 size={12} className="text-indigo-400" />}
+                            </button>
+                          )
+                        })}
+                      </motion.div>
+                    )}
+                  </AnimatePresence>
+                </div>
+              )}
+
               {/* Model Selector (functional dropdown) */}
               <div className="relative" ref={modelSelectorRef}>
                 <div
@@ -262,8 +365,7 @@ export default function App() {
                   className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors"
                 >
                   <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
-                    <span className="group-hover:text-gray-200 transition-colors">Perencanaan</span>
-                    <ChevronDown size={11} className="text-gray-500" />
+                    <span className="group-hover:text-gray-200 transition-colors">Model AI</span>
                   </div>
                   <div className="h-3 w-px bg-white/10 mx-3" />
                   <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
@@ -293,10 +395,7 @@ export default function App() {
                             <button
                               onClick={() => {
                                 setSelectedModel(model)
-                                // Jika tidak ada tiers, tutup dropdown. Jika ada, biarkan terbuka agar user bisa pilih tier
-                                if (!model.tiers?.length) {
-                                  setModelSelectorOpen(false)
-                                }
+                                setModelSelectorOpen(false)
                               }}
                               className={`w-full flex items-center justify-between px-4 py-2.5 transition-colors text-left ${
                                 isSelected ? 'bg-indigo-600/10' : 'hover:bg-white/5'
@@ -308,33 +407,14 @@ export default function App() {
                                 </span>
                                 <span className="text-[9px] text-gray-600 mt-0.5">{model.description}</span>
                               </div>
-                              {isSelected && !model.tiers?.length && (
+                              {isSelected && (
                                 <CheckCircle2 size={14} className="text-indigo-400 shrink-0 ml-2" />
                               )}
                             </button>
-
-                            {/* Thinking Tiers Options */}
-                            {isSelected && model.tiers && model.tiers.length > 0 && (
-                              <div className="flex flex-wrap gap-1.5 px-4 pb-3 pt-1 bg-indigo-600/5">
-                                {model.tiers.map((tier: any) => (
-                                  <button
-                                    key={tier.id}
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      setSelectedModel({ ...selectedModel, selectedTierId: tier.id } as any)
-                                      setModelSelectorOpen(false)
-                                    }}
-                                    className={`px-2 py-1 text-[9px] font-medium rounded transition-colors ${
-                                      selectedModel?.selectedTierId === tier.id
-                                        ? 'bg-indigo-500 text-white'
-                                        : 'bg-[#1e2330] text-gray-400 hover:text-gray-200 hover:bg-[#252b3b] border border-white/5'
-                                    }`}
-                                  >
-                                    {tier.name}
-                                  </button>
-                                ))}
-                              </div>
-                            )}
+                            
+                            {/* Di BASIC Mode, tiers sekarang diatur via Perencanaan Dropdown,
+                                tapi di ADVANCE kita bisa pertahankan ini atau seragamkan saja. 
+                                Sesuai mapping, kita seragamkan UI nya. */}
                           </div>
                         )
                       })}

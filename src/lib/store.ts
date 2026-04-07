@@ -32,6 +32,7 @@ export interface WizardData {
 export interface AiModelTier {
     id: string
     name: string
+    budget?: number
 }
 
 export interface AntigravityModel {
@@ -43,6 +44,12 @@ export interface AntigravityModel {
     outputTokenLimit: number
     source: string
     quotaPercent?: number
+    supportsThinking?: boolean
+    thinkingBudget?: number
+    minThinkingBudget?: number
+    supportsImages?: boolean
+    supportsVideo?: boolean
+    supportedMimeTypes?: string[]
     tiers?: AiModelTier[]
     selectedTierId?: string
 }
@@ -61,6 +68,7 @@ interface AppState {
     oauthToken: string | null
     projectId: string | null
     refreshToken: string | null
+    tokenExpiresAt: number | null  // Timestamp (ms) kapan token expired — buffer 30 detik (server.cjs baris 160)
     userName: string | null
     userEmail: string | null
 
@@ -79,6 +87,7 @@ interface AppState {
     setOauthToken: (token: string) => void
     setProjectId: (id: string) => void
     setRefreshToken: (token: string) => void
+    setTokenExpiresAt: (expiresAt: number) => void
     setUserName: (name: string) => void
     setUserEmail: (email: string) => void
 }
@@ -132,6 +141,7 @@ export const useAppStore = create<AppState>()(
       oauthToken: null,
       projectId: null,
       refreshToken: null,
+      tokenExpiresAt: null,
       userName: null,
       userEmail: null,
 
@@ -158,6 +168,7 @@ export const useAppStore = create<AppState>()(
       setOauthToken: (token: string) => set({ oauthToken: token }),
       setProjectId: (id: string) => set({ projectId: id }),
       setRefreshToken: (token: string) => set({ refreshToken: token }),
+      setTokenExpiresAt: (expiresAt: number) => set({ tokenExpiresAt: expiresAt }),
       setUserName: (name: string) => set({ userName: name }),
       setUserEmail: (email: string) => set({ userEmail: email }),
     }),
@@ -166,6 +177,7 @@ export const useAppStore = create<AppState>()(
       partialize: (state: AppState): any => ({
         oauthToken: state.oauthToken,
         refreshToken: state.refreshToken,
+        tokenExpiresAt: state.tokenExpiresAt,
         projectId: state.projectId,
         aiModels: state.aiModels,
         selectedModel: state.selectedModel,

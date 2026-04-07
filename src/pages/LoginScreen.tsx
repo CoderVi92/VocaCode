@@ -1,6 +1,8 @@
 import { motion } from 'framer-motion'
 import { invoke } from '@tauri-apps/api/core'
 import { useAppStore, AntigravityModel } from '../lib/store'
+import { generateRandomString, generateCodeChallenge, encodeState } from '../lib/auth-basic'
+import { logger } from '../lib/logger'
 import ScreenWrapper from '../components/ScreenWrapper'
 
 export default function LoginScreen() {
@@ -9,8 +11,20 @@ export default function LoginScreen() {
     const handleLogin = async () => {
         navigate('loading')
         try {
-            // login_oauth_proxy now returns JSON string: { access_token, refresh_token, project_id }
-            const loginResultJson: string = await invoke('login_oauth_proxy')
+            // Poin 1A: Generate PKCE verifier + challenge (mengikuti server.cjs generatePKCE baris 194-198)
+            const codeVerifier = generateRandomString(64)
+            const codeChallenge = await generateCodeChallenge(codeVerifier)
+            
+            // Generate CSRF State Encoding sesuai server.cjs baris 224
+            const state = encodeState({ verifier: codeVerifier, projectId: "" })
+            logger.info('AUTH', 'PKCE', `Generated verifier (${codeVerifier.length} chars) + challenge + state`)
+
+            // login_oauth_proxy now accepts PKCE params and returns JSON string: { access_token, refresh_token, project_id }
+            const loginResultJson: string = await invoke('login_oauth_proxy', {
+                codeChallenge,
+                codeVerifier,
+                oauthState: state
+            })
             const loginResult = JSON.parse(loginResultJson) as {
                 access_token: string
                 refresh_token: string
@@ -26,6 +40,9 @@ export default function LoginScreen() {
             store.setOauthToken(loginResult.access_token)
             store.setRefreshToken(loginResult.refresh_token)
             store.setProjectId(loginResult.project_id)
+            // Poin 2: Set expiresAt dengan buffer 30 detik (server.cjs baris 276)
+            // Google access_token berlaku 3599s — buffer 30s agar refresh terjadi sebelum expired
+            store.setTokenExpiresAt(Date.now() + (3599 * 1000) - 30000)
             store.setAiModels(models)
             if (models.length > 0) {
                 store.setSelectedModel(models[0])

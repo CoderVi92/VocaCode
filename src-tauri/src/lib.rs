@@ -56,19 +56,24 @@ struct LoginResult {
 }
 
 #[tauri::command]
-async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
+async fn login_oauth_proxy(app: tauri::AppHandle, code_challenge: String, code_verifier: String, oauth_state: String) -> Result<String, String> {
     let server = Server::http(format!("127.0.0.1:{}", CALLBACK_PORT)).map_err(|e| e.to_string())?;
 
+    // PKCE S256 — code_challenge dihasilkan oleh frontend (auth-basic.ts generateCodeChallenge)
+    // Serta State Encoding CSRF
+    // Mengikuti pola server.cjs buildAuthUrl() baris 213-230
     let auth_url = format!(
-        "https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&client_id={}&prompt=consent&redirect_uri=http://localhost:{}/oauth2callback&response_type=code&scope={}",
+        "https://accounts.google.com/o/oauth2/v2/auth?access_type=offline&client_id={}&prompt=consent&redirect_uri=http://localhost:{}/oauth2callback&response_type=code&scope={}&code_challenge={}&code_challenge_method=S256&state={}",
         CLIENT_ID,
         CALLBACK_PORT,
-        OAUTH_SCOPES.replace(' ', "%20")
+        OAUTH_SCOPES.replace(' ', "%20"),
+        code_challenge,
+        oauth_state
     );
 
     app.opener().open_url(&auth_url, None::<&str>).map_err(|e| e.to_string())?;
 
-    let auth_code = tauri::async_runtime::spawn_blocking(move || {
+    let (auth_code, returned_state) = tauri::async_runtime::spawn_blocking(move || {
         let start = std::time::Instant::now();
         loop {
             if start.elapsed().as_secs() > 120 {
@@ -78,6 +83,7 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
                 let url = request.url();
                 if url.starts_with("/oauth2callback") {
                     let mut code_val = String::new();
+                    let mut state_val = String::new();
                     if let Some(query) = url.split('?').nth(1) {
                         for param in query.split('&') {
                             if param.starts_with("code=") {
@@ -85,6 +91,9 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
                                 code_val = raw_code.replace("%2F", "/").replace("%2f", "/")
                                                    .replace("%3D", "=").replace("%3d", "=")
                                                    .replace("%2B", "+").replace("%2b", "+");
+                            }
+                            if param.starts_with("state=") {
+                                state_val = param.trim_start_matches("state=").to_string();
                             }
                         }
                     }
@@ -100,7 +109,7 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
                     response.add_header(Header::from_bytes(&b"Content-Type"[..], &b"text/html"[..]).unwrap());
                     let _ = request.respond(response);
                     
-                    return Ok(code_val);
+                    return Ok((code_val, state_val));
                 } else {
                     let response = Response::from_string("Not Found").with_status_code(404);
                     let _ = request.respond(response);
@@ -115,7 +124,13 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
         return Err("Authorization code failed".into());
     }
 
+    if returned_state != oauth_state {
+        return Err("State CSRF validation failed! Data mungkin telah disadap (State Encoding Error)".into());
+    }
+
+
     // ── Step 1: Exchange code for tokens ──
+    // PKCE: Sertakan code_verifier pada token exchange (server.cjs exchangeToken baris 256-263)
     #[derive(Serialize)]
     struct TokenRequest {
         client_id: String,
@@ -123,6 +138,7 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
         code: String,
         grant_type: String,
         redirect_uri: String,
+        code_verifier: String,
     }
 
     #[derive(Deserialize)]
@@ -140,6 +156,7 @@ async fn login_oauth_proxy(app: tauri::AppHandle) -> Result<String, String> {
             code: auth_code,
             grant_type: "authorization_code".into(),
             redirect_uri: format!("http://localhost:{}/oauth2callback", CALLBACK_PORT),
+            code_verifier: code_verifier,
         })
         .send()
         .await
@@ -358,6 +375,8 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
 struct AiModelTier {
     id: String,
     name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    budget: Option<u32>,
 }
 
 #[derive(serde::Serialize)]
@@ -372,6 +391,12 @@ struct AntigravityModel {
     #[serde(rename = "outputTokenLimit")]
     output_token_limit: u32,
     source: String,
+    #[serde(rename = "supportsImages")]
+    supports_images: bool,
+    #[serde(rename = "supportsVideo")]
+    supports_video: bool,
+    #[serde(rename = "supportedMimeTypes")]
+    supported_mime_types: Vec<String>,
     #[serde(rename = "quotaPercent", skip_serializing_if = "Option::is_none")]
     quota_percent: Option<u8>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -384,6 +409,9 @@ struct AntigravityModel {
 async fn fetch_gemini_models_with_quota(access_token: String, project_id: String) -> Result<Vec<AntigravityModel>, String> {
     // Model IDs match verified working models from opencode-ag-auth model-resolver.ts
     // Model list synced 100% dengan server.cjs MODELS array
+    let common_image_mimes = vec!["image/png".into(), "image/jpeg".into(), "image/webp".into()];
+    let common_video_mimes = vec!["video/mp4".into(), "video/webm".into()];
+
     let mut models = vec![
         AntigravityModel {
             id: "gemini-3.1-pro".into(),
@@ -393,11 +421,15 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
             source: "antigravity".into(),
+            supports_images: true,
+            supports_video: false,
+            supported_mime_types: common_image_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("gemini-3.1-pro-low".into()),
+            selected_tier_id: Some("gemini-3.1-pro".into()),
             tiers: Some(vec![
-                AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Low Thinking".into() },
-                AiModelTier { id: "gemini-3.1-pro-high".into(), name: "High Thinking".into() },
+                AiModelTier { id: "gemini-3.1-pro".into(), name: "Linear (Cepat)".into(), budget: Some(128) },
+                AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Sistematis".into(), budget: Some(1001) },
+                AiModelTier { id: "gemini-3.1-pro-high".into(), name: "Kompleks (Detail)".into(), budget: Some(10001) },
             ]),
         },
         AntigravityModel {
@@ -408,10 +440,14 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             input_token_limit: 1_048_576,
             output_token_limit: 65_536,
             source: "antigravity".into(),
+            supports_images: true,
+            supports_video: true,
+            supported_mime_types: [common_image_mimes.clone(), common_video_mimes.clone()].concat(),
             quota_percent: None,
             selected_tier_id: Some("gemini-3-flash-agent".into()),
             tiers: Some(vec![
-                AiModelTier { id: "gemini-3-flash-agent".into(), name: "Standard Thinking".into() },
+                AiModelTier { id: "gemini-3-flash-agent".into(), name: "Linear".into(), budget: Some(32) },
+                AiModelTier { id: "gemini-3-flash-agent-high".into(), name: "Kompleks".into(), budget: Some(1024) },
             ]),
         },
         AntigravityModel {
@@ -422,6 +458,9 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
+            supports_images: true,
+            supports_video: false,
+            supported_mime_types: common_image_mimes.clone(),
             quota_percent: None,
             selected_tier_id: None,
             tiers: None,
@@ -434,11 +473,14 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
+            supports_images: true,
+            supports_video: false,
+            supported_mime_types: common_image_mimes.clone(),
             quota_percent: None,
             selected_tier_id: Some("claude-sonnet-4-6-thinking-low".into()),
             tiers: Some(vec![
-                AiModelTier { id: "claude-sonnet-4-6-thinking-low".into(), name: "Low Thinking".into() },
-                AiModelTier { id: "claude-sonnet-4-6-thinking-max".into(), name: "Max Thinking".into() },
+                AiModelTier { id: "claude-sonnet-4-6-thinking-low".into(), name: "Linear (Cepat)".into(), budget: Some(1024) },
+                AiModelTier { id: "claude-sonnet-4-6-thinking-max".into(), name: "Kompleks (Detail)".into(), budget: Some(8192) },
             ]),
         },
         AntigravityModel {
@@ -449,11 +491,14 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             input_token_limit: 200_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
+            supports_images: true,
+            supports_video: false,
+            supported_mime_types: common_image_mimes.clone(),
             quota_percent: None,
             selected_tier_id: Some("claude-opus-4-6-thinking-low".into()),
             tiers: Some(vec![
-                AiModelTier { id: "claude-opus-4-6-thinking-low".into(), name: "Low Thinking".into() },
-                AiModelTier { id: "claude-opus-4-6-thinking-max".into(), name: "Max Thinking".into() },
+                AiModelTier { id: "claude-opus-4-6-thinking-low".into(), name: "Linear".into(), budget: Some(1024) },
+                AiModelTier { id: "claude-opus-4-6-thinking-max".into(), name: "Kompleks".into(), budget: Some(8192) },
             ]),
         },
         AntigravityModel {
@@ -464,9 +509,15 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             input_token_limit: 128_000,
             output_token_limit: 4_000,
             source: "antigravity".into(),
+            supports_images: false,
+            supports_video: false,
+            supported_mime_types: vec![],
             quota_percent: None,
-            selected_tier_id: None,
-            tiers: None,
+            selected_tier_id: Some("gpt-oss-120b-medium".into()),
+            tiers: Some(vec![
+                AiModelTier { id: "gpt-oss-120b-medium".into(), name: "Linear".into(), budget: Some(1024) },
+                AiModelTier { id: "gpt-oss-120b-medium-high".into(), name: "Kompleks".into(), budget: Some(8192) },
+            ]),
         },
     ];
 
@@ -561,16 +612,30 @@ struct ChatMessage {
     text: String,
 }
 
+#[derive(serde::Deserialize, serde::Serialize)]
+struct FileAttachment {
+    mime_type: String,
+    data: String,
+}
+
 // ── Execute Model Prompt — Non-streaming with retry (matching server.cjs chatWithModelRetry) ──
 #[tauri::command]
-async fn execute_model_prompt(app: AppHandle, token: String, project_id: String, model: String, prompt: String, history: Vec<ChatMessage>) -> Result<(), String> {
+async fn execute_model_prompt(
+    app: AppHandle, 
+    token: String, 
+    project_id: String, 
+    model: String, 
+    prompt: String, 
+    history: Vec<ChatMessage>, 
+    thinking_budget: Option<u32>,
+    attachments: Option<Vec<FileAttachment>>
+) -> Result<(), String> {
     let effective_project = if project_id.trim().is_empty() {
         DEFAULT_PROJECT_ID.to_string()
     } else {
         project_id
     };
 
-    // Body persis seperti server.cjs chatWithModel (tanpa properti thinkingConfig, biarkan API server-side parse -high otomatis)
     // Poin 5: Multi-Turn Chat (Konstruksi Array Contents)
     let mut contents = Vec::new();
     for msg in history {
@@ -581,18 +646,47 @@ async fn execute_model_prompt(app: AppHandle, token: String, project_id: String,
             "parts": [{ "text": msg.text }]
         }));
     }
-    // Terakhir masukkan prompt saat ini
+    
+    // Terakhir masukkan prompt saat ini beserta lampiran (Fitur 6)
+    let mut current_parts = Vec::new();
+    if let Some(files) = attachments {
+        for file in files {
+            current_parts.push(serde_json::json!({
+                "inlineData": {
+                    "mimeType": file.mime_type,
+                    "data": file.data
+                }
+            }));
+            let _ = write_debug_log("Kelompok 2 - Antigravity API".to_string(), "Attachments".to_string(), format!("Added file: {}", file.mime_type));
+        }
+    }
+    current_parts.push(serde_json::json!({ "text": prompt }));
+
     contents.push(serde_json::json!({
         "role": "user",
-        "parts": [{ "text": prompt }]
+        "parts": current_parts
     }));
+
+    let mut request_obj = serde_json::json!({
+        "contents": contents
+    });
+
+    if let Some(budget) = thinking_budget {
+        request_obj.as_object_mut().unwrap().insert(
+            "generationConfig".to_string(),
+            serde_json::json!({
+                "thinkingConfig": {
+                    "includeThoughts": true,
+                    "thinkingBudget": budget
+                }
+            })
+        );
+    }
 
     let payload = serde_json::json!({
         "project": effective_project,
         "model": model,
-        "request": {
-            "contents": contents
-        }
+        "request": request_obj
     });
 
     // Endpoint fallback: daily → autopush → prod (matching server.cjs CHAT_ENDPOINTS)
