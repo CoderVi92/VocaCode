@@ -371,16 +371,15 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
 
 
 // ── Model List ──
-// Refactored: Sinkronisasi 100% dengan server.cjs MODELS array
-// - Model IDs = model ID yang BENAR-BENAR DIKIRIM ke Google Antigravity API
-// - Tier IDs = model ID alternatif yang valid di API (BUKAN ID fiktif)
-// - apiProvider menentukan endpoint: OpenAI → streamGenerateContent, lainnya → generateContent
+// Refactored v2: Sinkronisasi 1:1 dengan server.cjs MODELS array (baris 63-112)
+// - 6 model terpisah, masing-masing dengan ID unik yang valid di API
+// - thinkingOptions menggantikan tiers (dropdown "Tingkat Berpikir")
+// - apiProvider menentukan endpoint routing
+
 #[derive(serde::Serialize, Clone)]
-struct AiModelTier {
-    id: String,
-    name: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    budget: Option<u32>,
+struct ThinkingOption {
+    label: String,
+    budget: i32,  // -1 = dynamic/auto (untuk Gemini Flash)
 }
 
 #[derive(serde::Serialize, Clone)]
@@ -403,40 +402,15 @@ struct AntigravityModel {
     supported_mime_types: Vec<String>,
     #[serde(rename = "quotaPercent", skip_serializing_if = "Option::is_none")]
     quota_percent: Option<u8>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    tiers: Option<Vec<AiModelTier>>,
-    #[serde(rename = "selectedTierId", skip_serializing_if = "Option::is_none")]
-    selected_tier_id: Option<String>,
-    /// Provider type menentukan endpoint routing (server.cjs baris 480-482)
     #[serde(rename = "apiProvider")]
     api_provider: String,
-}
-
-/// Menentukan model ID yang BENAR untuk dikirim ke API berdasarkan tier selection.
-/// Logika: Jika model mempunyai tiers dengan mapping model ID valid, gunakan tier ID.
-///         Jika tidak (Claude), selalu kirim base model ID.
-/// Ref: server.cjs baris 457-502 — model ID yang dikirim = MODELS[].id
-fn resolve_api_model_id(model: &AntigravityModel, selected_tier_id: &Option<String>) -> String {
-    // Untuk Claude & model tanpa tier-as-model-id: selalu kirim base model ID
-    // Thinking diatur via thinkingBudget, BUKAN via model ID
-    if model.api_provider == "API_PROVIDER_ANTHROPIC_VERTEX" {
-        return model.id.clone();
-    }
-    
-    // Untuk Gemini & GPT-OSS: tier ID = model ID yang valid di API
-    if let Some(ref tier_id) = selected_tier_id {
-        if let Some(ref tiers) = model.tiers {
-            if tiers.iter().any(|t| t.id == *tier_id) {
-                return tier_id.clone();
-            }
-        }
-    }
-    
-    model.id.clone()
+    #[serde(rename = "supportsThinking")]
+    supports_thinking: bool,
+    #[serde(rename = "thinkingOptions")]
+    thinking_options: Vec<ThinkingOption>,
 }
 
 /// Menentukan endpoint method berdasarkan apiProvider (server.cjs baris 480-481)
-/// OpenAI Vertex → streamGenerateContent, lainnya → generateContent
 fn get_api_method(api_provider: &str) -> &'static str {
     if api_provider == "API_PROVIDER_OPENAI_VERTEX" {
         "streamGenerateContent"
@@ -447,18 +421,18 @@ fn get_api_method(api_provider: &str) -> &'static str {
 
 #[tauri::command]
 async fn fetch_gemini_models_with_quota(access_token: String, project_id: String) -> Result<Vec<AntigravityModel>, String> {
-    // Model list synced 100% dengan server.cjs MODELS array (baris 63-112)
-    // Setiap model ID di sini HARUS valid di Google Antigravity API
+    // 6 model terpisah — 1:1 match dengan server.cjs MODELS[] (baris 63-112)
     let gemini_full_mimes: Vec<String> = vec!["image/heic","application/x-python-code","text/x-typescript","video/webm","application/rtf","image/png","text/xml","text/javascript","video/jpeg2000","video/mp4","text/markdown","application/x-javascript","video/text/timestamp","audio/webm;codecs=opus","video/audio/wav","text/csv","image/heif","image/jpeg","text/html","text/css","text/plain","application/x-ipynb+json","application/x-typescript","application/pdf","video/videoframe/jpeg2000","image/webp","video/audio/s16le","text/rtf","text/x-python","application/json","text/x-python-script"].iter().map(|s| s.to_string()).collect();
     let claude_mimes: Vec<String> = vec!["image/png","image/webp","video/jpeg2000","video/videoframe/jpeg2000","image/heic","image/heif","image/jpeg"].iter().map(|s| s.to_string()).collect();
 
     let mut models = vec![
-        // Gemini 3.1 Pro — Tiers ARE model IDs (server.cjs: gemini-3.1-pro-high, gemini-3.1-pro-low)
-        // Base ID = gemini-3.1-pro-low (default tier)
+        // 1. gemini-3.1-pro-high (server.cjs baris 64-71)
+        //    thinkingBudget: 10001, minThinkingBudget: 128
+        //    Opsi: Linear(128), Sistematis(5065), Kompleks(10001)
         AntigravityModel {
-            id: "gemini-3.1-pro-low".into(),
-            name: "gemini-3.1-pro".into(),
-            display_name: "Gemini 3.1 Pro".into(),
+            id: "gemini-3.1-pro-high".into(),
+            name: "gemini-3.1-pro-high".into(),
+            display_name: "Gemini 3.1 Pro (High)".into(),
             description: "Google's most capable model with advanced thinking".into(),
             input_token_limit: 1_048_576,
             output_token_limit: 65_535,
@@ -467,15 +441,40 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             supports_video: true,
             supported_mime_types: gemini_full_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("gemini-3.1-pro-low".into()),
-            tiers: Some(vec![
-                AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Linear (Cepat)".into(), budget: Some(128) },
-                AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Sistematis".into(), budget: Some(1001) },
-                AiModelTier { id: "gemini-3.1-pro-high".into(), name: "Kompleks (Detail)".into(), budget: Some(10001) },
-            ]),
             api_provider: "API_PROVIDER_GOOGLE_GEMINI".into(),
+            supports_thinking: true,
+            thinking_options: vec![
+                ThinkingOption { label: "Linear (128 tokens)".into(), budget: 128 },
+                ThinkingOption { label: "Sistematis (5065 tokens)".into(), budget: 5065 },
+                ThinkingOption { label: "Kompleks (10001 tokens)".into(), budget: 10001 },
+            ],
         },
-        // Gemini 3 Flash — (server.cjs: gemini-3-flash-agent, thinkingBudget=-1 dinamis)
+        // 2. gemini-3.1-pro-low (server.cjs baris 72-79)
+        //    thinkingBudget: 1001, minThinkingBudget: 128
+        //    Opsi: Linear(128), Sistematis(565), Kompleks(1001)
+        AntigravityModel {
+            id: "gemini-3.1-pro-low".into(),
+            name: "gemini-3.1-pro-low".into(),
+            display_name: "Gemini 3.1 Pro (Low)".into(),
+            description: "Balanced thinking with lower resource usage".into(),
+            input_token_limit: 1_048_576,
+            output_token_limit: 65_535,
+            source: "antigravity".into(),
+            supports_images: true,
+            supports_video: true,
+            supported_mime_types: gemini_full_mimes.clone(),
+            quota_percent: None,
+            api_provider: "API_PROVIDER_GOOGLE_GEMINI".into(),
+            supports_thinking: true,
+            thinking_options: vec![
+                ThinkingOption { label: "Linear (128 tokens)".into(), budget: 128 },
+                ThinkingOption { label: "Sistematis (565 tokens)".into(), budget: 565 },
+                ThinkingOption { label: "Kompleks (1001 tokens)".into(), budget: 1001 },
+            ],
+        },
+        // 3. gemini-3-flash-agent (server.cjs baris 80-87)
+        //    thinkingBudget: -1 (dynamic), minThinkingBudget: 32
+        //    Opsi: Linear(-1/default), Kompleks(-1/default)
         AntigravityModel {
             id: "gemini-3-flash-agent".into(),
             name: "gemini-3-flash-agent".into(),
@@ -488,16 +487,16 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             supports_video: true,
             supported_mime_types: gemini_full_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("gemini-3-flash-agent".into()),
-            tiers: Some(vec![
-                AiModelTier { id: "gemini-3-flash-agent".into(), name: "Linear".into(), budget: Some(32) },
-                AiModelTier { id: "gemini-3-flash-agent".into(), name: "Kompleks".into(), budget: Some(1024) },
-            ]),
             api_provider: "API_PROVIDER_GOOGLE_GEMINI".into(),
+            supports_thinking: true,
+            thinking_options: vec![
+                ThinkingOption { label: "Linear (otomatis)".into(), budget: -1 },
+                ThinkingOption { label: "Kompleks (otomatis)".into(), budget: -1 },
+            ],
         },
-        // Claude Sonnet 4.6 (Thinking) — (server.cjs: claude-sonnet-4-6)
-        // PENTING: Model ID yang dikirim ke API SELALU "claude-sonnet-4-6"
-        // Thinking level diatur via thinkingBudget, BUKAN via model ID
+        // 4. claude-sonnet-4-6 (server.cjs baris 88-95)
+        //    thinkingBudget: 1024, minThinkingBudget: 1024
+        //    Opsi: Linear(1024), Kompleks(1024) — keduanya di-clamp ke min
         AntigravityModel {
             id: "claude-sonnet-4-6".into(),
             name: "claude-sonnet-4-6".into(),
@@ -510,15 +509,15 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             supports_video: false,
             supported_mime_types: claude_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("claude-sonnet-4-6".into()),
-            tiers: Some(vec![
-                // Tier ID = base model ID (Claude thinking diatur via budget, bukan model ID)
-                AiModelTier { id: "claude-sonnet-4-6".into(), name: "Linear (Cepat)".into(), budget: Some(1024) },
-                AiModelTier { id: "claude-sonnet-4-6".into(), name: "Kompleks (Detail)".into(), budget: Some(8192) },
-            ]),
             api_provider: "API_PROVIDER_ANTHROPIC_VERTEX".into(),
+            supports_thinking: true,
+            thinking_options: vec![
+                ThinkingOption { label: "Linear (1024 tokens)".into(), budget: 1024 },
+                ThinkingOption { label: "Kompleks (1024 tokens)".into(), budget: 1024 },
+            ],
         },
-        // Claude Opus 4.6 (Thinking) — (server.cjs: claude-opus-4-6-thinking)
+        // 5. claude-opus-4-6-thinking (server.cjs baris 96-103)
+        //    thinkingBudget: 1024, minThinkingBudget: 1024
         AntigravityModel {
             id: "claude-opus-4-6-thinking".into(),
             name: "claude-opus-4-6-thinking".into(),
@@ -531,15 +530,16 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             supports_video: false,
             supported_mime_types: claude_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("claude-opus-4-6-thinking".into()),
-            tiers: Some(vec![
-                AiModelTier { id: "claude-opus-4-6-thinking".into(), name: "Linear".into(), budget: Some(1024) },
-                AiModelTier { id: "claude-opus-4-6-thinking".into(), name: "Kompleks".into(), budget: Some(8192) },
-            ]),
             api_provider: "API_PROVIDER_ANTHROPIC_VERTEX".into(),
+            supports_thinking: true,
+            thinking_options: vec![
+                ThinkingOption { label: "Linear (1024 tokens)".into(), budget: 1024 },
+                ThinkingOption { label: "Kompleks (1024 tokens)".into(), budget: 1024 },
+            ],
         },
-        // GPT-OSS 120B — (server.cjs: gpt-oss-120b-medium)
-        // PENTING: apiProvider = API_PROVIDER_OPENAI_VERTEX → endpoint = streamGenerateContent
+        // 6. gpt-oss-120b-medium (server.cjs baris 104-111)
+        //    thinkingBudget: 8192, minThinkingBudget: 1024
+        //    PENTING: apiProvider = API_PROVIDER_OPENAI_VERTEX → streamGenerateContent
         AntigravityModel {
             id: "gpt-oss-120b-medium".into(),
             name: "gpt-oss-120b-medium".into(),
@@ -552,12 +552,12 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             supports_video: false,
             supported_mime_types: vec![],
             quota_percent: None,
-            selected_tier_id: Some("gpt-oss-120b-medium".into()),
-            tiers: Some(vec![
-                AiModelTier { id: "gpt-oss-120b-medium".into(), name: "Linear".into(), budget: Some(1024) },
-                AiModelTier { id: "gpt-oss-120b-medium".into(), name: "Kompleks".into(), budget: Some(8192) },
-            ]),
             api_provider: "API_PROVIDER_OPENAI_VERTEX".into(),
+            supports_thinking: true,
+            thinking_options: vec![
+                ThinkingOption { label: "Linear (1024 tokens)".into(), budget: 1024 },
+                ThinkingOption { label: "Kompleks (8192 tokens)".into(), budget: 8192 },
+            ],
         },
     ];
 
@@ -613,22 +613,7 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
                             }
                         }
 
-                        // Pass 2: Jika tidak exact match, match ke base model jika key ada di dalam tiers
-                        // Misalnya key API = "gemini-3.1-pro-high", masuk kuotanya ke base model "gemini-3.1-pro"
-                        if !matched {
-                            for model in models.iter_mut() {
-                                if let Some(ref tiers) = model.tiers {
-                                    if tiers.iter().any(|t| t.id == *key) {
-                                        // Update persentase kuota di base model
-                                        model.quota_percent = Some(percent);
-                                        matched = true;
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-
-                        // Pass 3: Fallback loose partial match
+                        // Pass 2: Fallback loose partial match
                         if !matched {
                             for model in models.iter_mut() {
                                 if model.quota_percent.is_none() && (model.id.contains(key.as_str()) || key.contains(model.id.as_str())) {
@@ -721,15 +706,19 @@ async fn execute_model_prompt(
     });
 
     if let Some(budget) = thinking_budget {
-        request_obj.as_object_mut().unwrap().insert(
-            "generationConfig".to_string(),
-            serde_json::json!({
-                "thinkingConfig": {
-                    "includeThoughts": true,
-                    "thinkingBudget": budget
-                }
-            })
-        );
+        // Hanya tambahkan thinkingConfig jika budget valid (> 0)
+        // Nilai -1 atau <= 0 berarti default/tidak didukung (seperti GPT-OSS) sehingga mencegah API merespon 400
+        if budget > 0 {
+            request_obj.as_object_mut().unwrap().insert(
+                "generationConfig".to_string(),
+                serde_json::json!({
+                    "thinkingConfig": {
+                        "includeThoughts": true,
+                        "thinkingBudget": budget
+                    }
+                })
+            );
+        }
     }
 
     let payload = serde_json::json!({

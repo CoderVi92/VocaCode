@@ -42,6 +42,8 @@ export default function App() {
   const setProfileOpen = useAppStore((s: any) => s.setProfileOpen)
   const navigate = useAppStore((s: any) => s.navigate)
   const selectedModel = useAppStore((s: any) => s.selectedModel)
+  const selectedThinkingIndex = useAppStore((s: any) => s.selectedThinkingIndex)
+  const setSelectedThinkingIndex = useAppStore((s: any) => s.setSelectedThinkingIndex)
   const aiModels = useAppStore((s: any) => s.aiModels)
   const setSelectedModel = useAppStore((s: any) => s.setSelectedModel)
   const userName = useAppStore((s: any) => s.userName)
@@ -228,7 +230,7 @@ export default function App() {
           const updatedModel = models.find((m: any) => m.id === currentSelectedId)
           if (updatedModel) {
             useAppStore.setState({ 
-              selectedModel: { ...updatedModel, selectedTierId: useAppStore.getState().selectedModel?.selectedTierId } 
+              selectedModel: { ...updatedModel } 
             })
           }
         }
@@ -305,20 +307,20 @@ export default function App() {
                 <span className="font-bold text-[10px] text-white uppercase tracking-tighter leading-none">VC</span>
               </div>
 
-              {/* Thinking / Perencanaan Selector (BASIC Khusus) */}
-              {mode === 'BASIC' && selectedModel?.tiers && selectedModel.tiers.length > 0 && (
+              {/* Tingkat Berpikir Selector (BASIC Khusus) */}
+              {mode === 'BASIC' && selectedModel?.thinkingOptions && selectedModel.thinkingOptions.length > 0 && (
                 <div className="relative" ref={thinkingSelectorRef}>
                   <div
                     onClick={() => setThinkingSelectorOpen(!isThinkingSelectorOpen)}
                     className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors"
                   >
                     <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
-                      <span className="group-hover:text-gray-200 transition-colors">Perencanaan</span>
+                      <span className="group-hover:text-gray-200 transition-colors">Tingkat Berpikir</span>
                     </div>
                     <div className="h-3 w-px bg-white/10 mx-3" />
                     <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
                       <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
-                        {selectedModel.tiers.find((t: any) => t.id === selectedModel.selectedTierId)?.name || 'Default'}
+                        {selectedModel.thinkingOptions[selectedThinkingIndex]?.label || 'Default'}
                       </span>
                       <ChevronDown size={11} className={`text-gray-500 transition-transform duration-200 ${isThinkingSelectorOpen ? 'rotate-180' : ''}`} />
                     </div>
@@ -334,20 +336,20 @@ export default function App() {
                         className="absolute top-10 left-0 w-48 bg-[#161920] border border-white/10 rounded-xl shadow-2xl py-2 z-[100]"
                       >
                         <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Tingkat Berpikir</p>
-                        {selectedModel.tiers.map((tier: any) => {
-                          const isSelected = selectedModel.selectedTierId === tier.id
+                        {selectedModel.thinkingOptions.map((opt: any, index: number) => {
+                          const isSelected = selectedThinkingIndex === index
                           return (
                             <button
-                              key={tier.id}
+                              key={index}
                               onClick={() => {
-                                setSelectedModel({ ...selectedModel, selectedTierId: tier.id } as any)
+                                setSelectedThinkingIndex(index)
                                 setThinkingSelectorOpen(false)
                               }}
                               className={`w-full flex items-center justify-between px-4 py-2 transition-colors text-left ${
                                 isSelected ? 'bg-indigo-600/10 text-indigo-300' : 'text-gray-300 hover:bg-white/5'
                               }`}
                             >
-                              <span className="text-[11px] font-bold">{tier.name}</span>
+                              <span className="text-[11px] font-bold">{opt.label}</span>
                               {isSelected && <CheckCircle2 size={12} className="text-indigo-400" />}
                             </button>
                           )

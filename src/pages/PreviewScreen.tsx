@@ -34,6 +34,7 @@ export default function PreviewScreen() {
     const oauthToken = useAppStore((s) => s.oauthToken)
     const projectId = useAppStore((s) => s.projectId)
     const selectedModel = useAppStore((s) => s.selectedModel)
+    const selectedThinkingIndex = useAppStore((s) => s.selectedThinkingIndex)
     const mode = useAppStore((s: any) => s.mode) // Poin: Kondisi BASIC
 
     const [aiInput, setAiInput] = useState('')
@@ -200,16 +201,8 @@ export default function PreviewScreen() {
         setAiResponse('')
         setIsGenerating(true)
 
-        const baseModelId = selectedModel?.id || 'gemini-3.1-pro'
-        
-        // Prioritaskan selectedTierId jika ada. Jika tidak, gunakan baseModelId.
-        const modelId = selectedModel?.selectedTierId || baseModelId
-        
-        // Cari nama tier jika sedang menggunakan tier
-        const tierName = selectedModel?.tiers?.find(t => t.id === modelId)?.name
-        const modelName = selectedModel?.displayName 
-            ? `${selectedModel.displayName}${tierName ? ` (${tierName})` : ''}` 
-            : modelId
+        const modelId = selectedModel?.id || 'gemini-3.1-pro-low'
+        const modelName = selectedModel?.displayName || modelId
 
         // Poin 8: Mereset state error sebelum mencoba
         if (mode === 'BASIC') setErrorState({ type: null, message: '' })
@@ -269,8 +262,8 @@ export default function PreviewScreen() {
                 unlistenError?.()
             })
 
-            const selectedTier = selectedModel?.tiers?.find(t => t.id === modelId)
-            const thinkingBudget = selectedTier?.budget || undefined
+            const option = selectedModel?.thinkingOptions?.[selectedThinkingIndex]
+            const thinkingBudget = option ? option.budget : undefined
 
             // Poin 5 & Complexity: Kirim chatHistory yang sebenarnya (bukan gabungan string hack)
             // server.cjs baris 480-482: apiProvider menentukan endpoint routing

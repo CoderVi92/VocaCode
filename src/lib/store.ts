@@ -29,10 +29,9 @@ export interface WizardData {
     outputType: 'static' | 'dynamic'
 }
 
-export interface AiModelTier {
-    id: string
-    name: string
-    budget?: number
+export interface ThinkingOption {
+    label: string
+    budget: number  // -1 = dynamic/auto
 }
 
 export interface AntigravityModel {
@@ -45,14 +44,11 @@ export interface AntigravityModel {
     source: string
     quotaPercent?: number
     supportsThinking?: boolean
-    thinkingBudget?: number
-    minThinkingBudget?: number
     supportsImages?: boolean
     supportsVideo?: boolean
     supportedMimeTypes?: string[]
-    tiers?: AiModelTier[]
-    selectedTierId?: string
-    apiProvider?: string  // Menentukan endpoint routing (server.cjs baris 480-482)
+    thinkingOptions?: ThinkingOption[]
+    apiProvider?: string
 }
 
 interface AppState {
@@ -66,10 +62,11 @@ interface AppState {
     wizardData: WizardData
     aiModels: AntigravityModel[]
     selectedModel: AntigravityModel | null
+    selectedThinkingIndex: number  // Index ke thinkingOptions[] — default 0
     oauthToken: string | null
     projectId: string | null
     refreshToken: string | null
-    tokenExpiresAt: number | null  // Timestamp (ms) kapan token expired — buffer 30 detik (server.cjs baris 160)
+    tokenExpiresAt: number | null
     userName: string | null
     userEmail: string | null
 
@@ -85,6 +82,7 @@ interface AppState {
     toggleWizardPage: (page: string) => void
     setAiModels: (models: AntigravityModel[]) => void
     setSelectedModel: (model: AntigravityModel) => void
+    setSelectedThinkingIndex: (index: number) => void
     setOauthToken: (token: string) => void
     setProjectId: (id: string) => void
     setRefreshToken: (token: string) => void
@@ -145,6 +143,7 @@ export const useAppStore = create<AppState>()(
       tokenExpiresAt: null,
       userName: null,
       userEmail: null,
+      selectedThinkingIndex: 0,
 
       navigate: (page: AppPage) => set({ currentPage: page }),
       setMode: (mode: AppMode) => set({ mode }),
@@ -165,7 +164,8 @@ export const useAppStore = create<AppState>()(
               },
           })),
       setAiModels: (models: AntigravityModel[]) => set({ aiModels: models }),
-      setSelectedModel: (model: AntigravityModel) => set({ selectedModel: model }),
+      setSelectedModel: (model: AntigravityModel) => set({ selectedModel: model, selectedThinkingIndex: 0 }), // Reset index saat ganti model
+      setSelectedThinkingIndex: (index: number) => set({ selectedThinkingIndex: index }),
       setOauthToken: (token: string) => set({ oauthToken: token }),
       setProjectId: (id: string) => set({ projectId: id }),
       setRefreshToken: (token: string) => set({ refreshToken: token }),
