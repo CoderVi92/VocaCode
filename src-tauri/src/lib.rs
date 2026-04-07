@@ -371,7 +371,11 @@ async fn refresh_access_token(refresh_token: String) -> Result<String, String> {
 
 
 // ── Model List ──
-#[derive(serde::Serialize)]
+// Refactored: Sinkronisasi 100% dengan server.cjs MODELS array
+// - Model IDs = model ID yang BENAR-BENAR DIKIRIM ke Google Antigravity API
+// - Tier IDs = model ID alternatif yang valid di API (BUKAN ID fiktif)
+// - apiProvider menentukan endpoint: OpenAI → streamGenerateContent, lainnya → generateContent
+#[derive(serde::Serialize, Clone)]
 struct AiModelTier {
     id: String,
     name: String,
@@ -379,7 +383,7 @@ struct AiModelTier {
     budget: Option<u32>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Clone)]
 struct AntigravityModel {
     id: String,
     name: String,
@@ -403,18 +407,56 @@ struct AntigravityModel {
     tiers: Option<Vec<AiModelTier>>,
     #[serde(rename = "selectedTierId", skip_serializing_if = "Option::is_none")]
     selected_tier_id: Option<String>,
+    /// Provider type menentukan endpoint routing (server.cjs baris 480-482)
+    #[serde(rename = "apiProvider")]
+    api_provider: String,
+}
+
+/// Menentukan model ID yang BENAR untuk dikirim ke API berdasarkan tier selection.
+/// Logika: Jika model mempunyai tiers dengan mapping model ID valid, gunakan tier ID.
+///         Jika tidak (Claude), selalu kirim base model ID.
+/// Ref: server.cjs baris 457-502 — model ID yang dikirim = MODELS[].id
+fn resolve_api_model_id(model: &AntigravityModel, selected_tier_id: &Option<String>) -> String {
+    // Untuk Claude & model tanpa tier-as-model-id: selalu kirim base model ID
+    // Thinking diatur via thinkingBudget, BUKAN via model ID
+    if model.api_provider == "API_PROVIDER_ANTHROPIC_VERTEX" {
+        return model.id.clone();
+    }
+    
+    // Untuk Gemini & GPT-OSS: tier ID = model ID yang valid di API
+    if let Some(ref tier_id) = selected_tier_id {
+        if let Some(ref tiers) = model.tiers {
+            if tiers.iter().any(|t| t.id == *tier_id) {
+                return tier_id.clone();
+            }
+        }
+    }
+    
+    model.id.clone()
+}
+
+/// Menentukan endpoint method berdasarkan apiProvider (server.cjs baris 480-481)
+/// OpenAI Vertex → streamGenerateContent, lainnya → generateContent
+fn get_api_method(api_provider: &str) -> &'static str {
+    if api_provider == "API_PROVIDER_OPENAI_VERTEX" {
+        "streamGenerateContent"
+    } else {
+        "generateContent"
+    }
 }
 
 #[tauri::command]
 async fn fetch_gemini_models_with_quota(access_token: String, project_id: String) -> Result<Vec<AntigravityModel>, String> {
-    // Model IDs match verified working models from opencode-ag-auth model-resolver.ts
-    // Model list synced 100% dengan server.cjs MODELS array
-    let common_image_mimes = vec!["image/png".into(), "image/jpeg".into(), "image/webp".into()];
-    let common_video_mimes = vec!["video/mp4".into(), "video/webm".into()];
+    // Model list synced 100% dengan server.cjs MODELS array (baris 63-112)
+    // Setiap model ID di sini HARUS valid di Google Antigravity API
+    let gemini_full_mimes: Vec<String> = vec!["image/heic","application/x-python-code","text/x-typescript","video/webm","application/rtf","image/png","text/xml","text/javascript","video/jpeg2000","video/mp4","text/markdown","application/x-javascript","video/text/timestamp","audio/webm;codecs=opus","video/audio/wav","text/csv","image/heif","image/jpeg","text/html","text/css","text/plain","application/x-ipynb+json","application/x-typescript","application/pdf","video/videoframe/jpeg2000","image/webp","video/audio/s16le","text/rtf","text/x-python","application/json","text/x-python-script"].iter().map(|s| s.to_string()).collect();
+    let claude_mimes: Vec<String> = vec!["image/png","image/webp","video/jpeg2000","video/videoframe/jpeg2000","image/heic","image/heif","image/jpeg"].iter().map(|s| s.to_string()).collect();
 
     let mut models = vec![
+        // Gemini 3.1 Pro — Tiers ARE model IDs (server.cjs: gemini-3.1-pro-high, gemini-3.1-pro-low)
+        // Base ID = gemini-3.1-pro-low (default tier)
         AntigravityModel {
-            id: "gemini-3.1-pro".into(),
+            id: "gemini-3.1-pro-low".into(),
             name: "gemini-3.1-pro".into(),
             display_name: "Gemini 3.1 Pro".into(),
             description: "Google's most capable model with advanced thinking".into(),
@@ -422,16 +464,18 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             output_token_limit: 65_535,
             source: "antigravity".into(),
             supports_images: true,
-            supports_video: false,
-            supported_mime_types: common_image_mimes.clone(),
+            supports_video: true,
+            supported_mime_types: gemini_full_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("gemini-3.1-pro".into()),
+            selected_tier_id: Some("gemini-3.1-pro-low".into()),
             tiers: Some(vec![
-                AiModelTier { id: "gemini-3.1-pro".into(), name: "Linear (Cepat)".into(), budget: Some(128) },
+                AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Linear (Cepat)".into(), budget: Some(128) },
                 AiModelTier { id: "gemini-3.1-pro-low".into(), name: "Sistematis".into(), budget: Some(1001) },
                 AiModelTier { id: "gemini-3.1-pro-high".into(), name: "Kompleks (Detail)".into(), budget: Some(10001) },
             ]),
+            api_provider: "API_PROVIDER_GOOGLE_GEMINI".into(),
         },
+        // Gemini 3 Flash — (server.cjs: gemini-3-flash-agent, thinkingBudget=-1 dinamis)
         AntigravityModel {
             id: "gemini-3-flash-agent".into(),
             name: "gemini-3-flash-agent".into(),
@@ -442,72 +486,67 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             source: "antigravity".into(),
             supports_images: true,
             supports_video: true,
-            supported_mime_types: [common_image_mimes.clone(), common_video_mimes.clone()].concat(),
+            supported_mime_types: gemini_full_mimes.clone(),
             quota_percent: None,
             selected_tier_id: Some("gemini-3-flash-agent".into()),
             tiers: Some(vec![
                 AiModelTier { id: "gemini-3-flash-agent".into(), name: "Linear".into(), budget: Some(32) },
-                AiModelTier { id: "gemini-3-flash-agent-high".into(), name: "Kompleks".into(), budget: Some(1024) },
+                AiModelTier { id: "gemini-3-flash-agent".into(), name: "Kompleks".into(), budget: Some(1024) },
             ]),
+            api_provider: "API_PROVIDER_GOOGLE_GEMINI".into(),
         },
+        // Claude Sonnet 4.6 (Thinking) — (server.cjs: claude-sonnet-4-6)
+        // PENTING: Model ID yang dikirim ke API SELALU "claude-sonnet-4-6"
+        // Thinking level diatur via thinkingBudget, BUKAN via model ID
         AntigravityModel {
             id: "claude-sonnet-4-6".into(),
             name: "claude-sonnet-4-6".into(),
-            display_name: "Claude Sonnet 4.6".into(),
-            description: "Anthropic's balanced model for high intelligence and speed".into(),
-            input_token_limit: 200_000,
-            output_token_limit: 64_000,
-            source: "antigravity".into(),
-            supports_images: true,
-            supports_video: false,
-            supported_mime_types: common_image_mimes.clone(),
-            quota_percent: None,
-            selected_tier_id: None,
-            tiers: None,
-        },
-        AntigravityModel {
-            id: "claude-sonnet-4-6-thinking".into(),
-            name: "claude-sonnet-4-6-thinking".into(),
             display_name: "Claude Sonnet 4.6 (Thinking)".into(),
-            description: "Claude Sonnet extended thinking capabilities".into(),
-            input_token_limit: 200_000,
+            description: "Anthropic's balanced model with extended thinking".into(),
+            input_token_limit: 250_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
             supports_images: true,
             supports_video: false,
-            supported_mime_types: common_image_mimes.clone(),
+            supported_mime_types: claude_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("claude-sonnet-4-6-thinking-low".into()),
+            selected_tier_id: Some("claude-sonnet-4-6".into()),
             tiers: Some(vec![
-                AiModelTier { id: "claude-sonnet-4-6-thinking-low".into(), name: "Linear (Cepat)".into(), budget: Some(1024) },
-                AiModelTier { id: "claude-sonnet-4-6-thinking-max".into(), name: "Kompleks (Detail)".into(), budget: Some(8192) },
+                // Tier ID = base model ID (Claude thinking diatur via budget, bukan model ID)
+                AiModelTier { id: "claude-sonnet-4-6".into(), name: "Linear (Cepat)".into(), budget: Some(1024) },
+                AiModelTier { id: "claude-sonnet-4-6".into(), name: "Kompleks (Detail)".into(), budget: Some(8192) },
             ]),
+            api_provider: "API_PROVIDER_ANTHROPIC_VERTEX".into(),
         },
+        // Claude Opus 4.6 (Thinking) — (server.cjs: claude-opus-4-6-thinking)
         AntigravityModel {
             id: "claude-opus-4-6-thinking".into(),
             name: "claude-opus-4-6-thinking".into(),
             display_name: "Claude Opus 4.6 (Thinking)".into(),
             description: "Claude's most powerful reasoning model".into(),
-            input_token_limit: 200_000,
+            input_token_limit: 250_000,
             output_token_limit: 64_000,
             source: "antigravity".into(),
             supports_images: true,
             supports_video: false,
-            supported_mime_types: common_image_mimes.clone(),
+            supported_mime_types: claude_mimes.clone(),
             quota_percent: None,
-            selected_tier_id: Some("claude-opus-4-6-thinking-low".into()),
+            selected_tier_id: Some("claude-opus-4-6-thinking".into()),
             tiers: Some(vec![
-                AiModelTier { id: "claude-opus-4-6-thinking-low".into(), name: "Linear".into(), budget: Some(1024) },
-                AiModelTier { id: "claude-opus-4-6-thinking-max".into(), name: "Kompleks".into(), budget: Some(8192) },
+                AiModelTier { id: "claude-opus-4-6-thinking".into(), name: "Linear".into(), budget: Some(1024) },
+                AiModelTier { id: "claude-opus-4-6-thinking".into(), name: "Kompleks".into(), budget: Some(8192) },
             ]),
+            api_provider: "API_PROVIDER_ANTHROPIC_VERTEX".into(),
         },
+        // GPT-OSS 120B — (server.cjs: gpt-oss-120b-medium)
+        // PENTING: apiProvider = API_PROVIDER_OPENAI_VERTEX → endpoint = streamGenerateContent
         AntigravityModel {
             id: "gpt-oss-120b-medium".into(),
             name: "gpt-oss-120b-medium".into(),
             display_name: "GPT-OSS 120B (Medium)".into(),
             description: "High-performance open weights model".into(),
-            input_token_limit: 128_000,
-            output_token_limit: 4_000,
+            input_token_limit: 114_000,
+            output_token_limit: 32_768,
             source: "antigravity".into(),
             supports_images: false,
             supports_video: false,
@@ -516,8 +555,9 @@ async fn fetch_gemini_models_with_quota(access_token: String, project_id: String
             selected_tier_id: Some("gpt-oss-120b-medium".into()),
             tiers: Some(vec![
                 AiModelTier { id: "gpt-oss-120b-medium".into(), name: "Linear".into(), budget: Some(1024) },
-                AiModelTier { id: "gpt-oss-120b-medium-high".into(), name: "Kompleks".into(), budget: Some(8192) },
+                AiModelTier { id: "gpt-oss-120b-medium".into(), name: "Kompleks".into(), budget: Some(8192) },
             ]),
+            api_provider: "API_PROVIDER_OPENAI_VERTEX".into(),
         },
     ];
 
@@ -618,7 +658,11 @@ struct FileAttachment {
     data: String,
 }
 
-// ── Execute Model Prompt — Non-streaming with retry (matching server.cjs chatWithModelRetry) ──
+// ── Execute Model Prompt — Provider-aware routing (matching server.cjs chatWithModel) ──
+// Refactored: Endpoint routing berdasarkan apiProvider
+//   - API_PROVIDER_OPENAI_VERTEX  → streamGenerateContent
+//   - API_PROVIDER_GOOGLE_GEMINI  → generateContent  
+//   - API_PROVIDER_ANTHROPIC_VERTEX → generateContent
 #[tauri::command]
 async fn execute_model_prompt(
     app: AppHandle, 
@@ -628,13 +672,17 @@ async fn execute_model_prompt(
     prompt: String, 
     history: Vec<ChatMessage>, 
     thinking_budget: Option<u32>,
-    attachments: Option<Vec<FileAttachment>>
+    attachments: Option<Vec<FileAttachment>>,
+    api_provider: Option<String>
 ) -> Result<(), String> {
     let effective_project = if project_id.trim().is_empty() {
         DEFAULT_PROJECT_ID.to_string()
     } else {
         project_id
     };
+
+    // Resolve apiProvider (dari frontend, atau default ke Gemini)
+    let api_provider = api_provider.unwrap_or_else(|| "API_PROVIDER_GOOGLE_GEMINI".to_string());
 
     // Poin 5: Multi-Turn Chat (Konstruksi Array Contents)
     let mut contents = Vec::new();
@@ -667,6 +715,7 @@ async fn execute_model_prompt(
         "parts": current_parts
     }));
 
+    // server.cjs baris 486-496: Konstruksi request payload dengan thinkingConfig
     let mut request_obj = serde_json::json!({
         "contents": contents
     });
@@ -689,6 +738,17 @@ async fn execute_model_prompt(
         "request": request_obj
     });
 
+    let _ = write_debug_log(
+        "Kelompok 2 - Antigravity API".to_string(),
+        "PayloadInfo".to_string(),
+        format!("Model: {} | Provider: {} | Method: {} | ThinkingBudget: {:?}", model, api_provider, get_api_method(&api_provider), thinking_budget)
+    );
+
+    // Tentukan API method berdasarkan provider (server.cjs baris 480-482)
+    // OpenAI Vertex → streamGenerateContent, lainnya → generateContent
+    let api_method = get_api_method(&api_provider);
+    let is_stream = api_provider == "API_PROVIDER_OPENAI_VERTEX";
+
     // Endpoint fallback: daily → autopush → prod (matching server.cjs CHAT_ENDPOINTS)
     let chat_endpoints = [ENDPOINT_DAILY, ENDPOINT_AUTOPUSH, ENDPOINT_PROD];
     let client = reqwest::Client::new();
@@ -702,10 +762,18 @@ async fn execute_model_prompt(
         let mut retry_status: u16 = 0;
         let mut success = false;
         let mut response_data: Option<Value> = None;
+        let mut aggregated_text = String::new();
+        let mut aggregated_thoughts = String::new();
 
         for endpoint in &chat_endpoints {
-            // URL: /v1internal:generateContent (NON-STREAMING)
-            let url = format!("{}/{}:generateContent", endpoint, API_VERSION);
+            // URL: /v1internal:{method} — method ditentukan oleh provider (server.cjs baris 482)
+            let url = format!("{}/{}:{}", endpoint, API_VERSION, api_method);
+
+            let _ = write_debug_log(
+                "Kelompok 2 - Antigravity API".to_string(),
+                format!("ChatRequest - {} ({})", model, endpoint),
+                format!("Method: {} | Provider: {} | isStream: {}", api_method, api_provider, is_stream)
+            );
 
             let res = match client.post(&url)
                 .bearer_auth(&token)
@@ -729,19 +797,47 @@ async fn execute_model_prompt(
             let _ = write_debug_log(
                 "Kelompok 2 - Antigravity API".to_string(), 
                 format!("ChatResponse - {} ({})", model, endpoint), 
-                format!("HTTP Status: {}\nRaw Body:\n{}", status, err_text)
+                format!("HTTP Status: {}\nRaw Body:\n{}", status, &err_text[..err_text.len().min(2000)])
             );
             
             if status >= 200 && status < 300 {
-                if let Ok(mut data) = serde_json::from_str::<Value>(&err_text) {
-                    // Poin 10 Complexity: Handle jika API mengembalikan ARRAY of chunks (server.cjs baris 527)
-                    if let Some(arr) = data.as_array() {
-                        if !arr.is_empty() {
-                            // Ambil chunk terakhir sebagai data utama
-                            data = arr.last().cloned().unwrap_or(data);
+                if let Ok(data) = serde_json::from_str::<Value>(&err_text) {
+                    // server.cjs baris 524-548: Handle stream vs non-stream response
+                    if is_stream {
+                        // streamGenerateContent mengembalikan JSON Array of chunks
+                        // Gabungkan teks dari SEMUA chunks, pisahkan thoughts vs text
+                        if let Some(arr) = data.as_array() {
+                            for chunk in arr {
+                                let candidates = chunk.get("response")
+                                    .and_then(|r| r.get("candidates"))
+                                    .or_else(|| chunk.get("candidates"));
+                                if let Some(cands) = candidates.and_then(|c| c.as_array()) {
+                                    if let Some(first) = cands.first() {
+                                        if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
+                                            for part in parts {
+                                                let is_thought = part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false);
+                                                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                                                    if is_thought {
+                                                        aggregated_thoughts.push_str(t);
+                                                    } else {
+                                                        aggregated_text.push_str(t);
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Ambil chunk terakhir sebagai data utama (untuk usage metadata)
+                            response_data = arr.last().cloned().map(Some).unwrap_or(Some(data));
+                        } else {
+                            // Bukan array, treat sebagai single response
+                            response_data = Some(data);
                         }
+                    } else {
+                        // Non-stream: response langsung
+                        response_data = Some(data);
                     }
-                    response_data = Some(data);
                     success = true;
                     break;
                 } else {
@@ -785,8 +881,9 @@ async fn execute_model_prompt(
         // Jika salah satu endpoint pada loop di atas berhasil:
         if success {
             if let Some(data) = response_data {
-                // Check API-level error JSON
-                if let Some(err) = data.get("error") {
+                // Check API-level error JSON (bisa di level root atau nested di response)
+                let error_json = data.get("error").or_else(|| data.pointer("/response/error"));
+                if let Some(err) = error_json {
                     let err_code = err.get("code").and_then(|c| c.as_u64()).unwrap_or(0);
                     let err_status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
                     let raw_msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Error tidak diketahui dari API");
@@ -797,6 +894,8 @@ async fn execute_model_prompt(
                         format!("Model {} sedang penuh. Coba beberapa saat lagi atau gunakan model lain.", model)
                     } else if err_code == 429 {
                         format!("Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.")
+                    } else if err_code == 404 || err_status == "NOT_FOUND" {
+                        format!("Error API (404): {} — Model '{}' tidak ditemukan. Pastikan Model terpilih tersedia.", raw_msg, model)
                     } else {
                         format!("Error AI: {}", raw_msg)
                     };
@@ -805,25 +904,23 @@ async fn execute_model_prompt(
                     return Err(friendly_msg);
                 }
 
-                let candidates = data.get("candidates").or_else(|| data.pointer("/response/candidates"));
-                let mut text = String::new();
+                // Gabungkan teks dari stream (jika sudah di-aggregate sebelumnya)
+                let mut text = aggregated_text.clone();
 
-                if let Some(cands) = candidates.and_then(|c| c.as_array()) {
-                    if let Some(first) = cands.first() {
-                        if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
-                            for part in parts {
-                                let is_thought = part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false);
-                                if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
-                                    if !t.is_empty() && !is_thought {
-                                        text = t.to_string();
-                                        break;
-                                    }
-                                }
-                            }
-                            if text.is_empty() {
-                                if let Some(first_part) = parts.first() {
-                                    if let Some(t) = first_part.get("text").and_then(|t| t.as_str()) {
-                                        text = t.to_string();
+                // Untuk non-stream atau jika aggregated kosong: extract dari response langsung
+                if text.is_empty() {
+                    let candidates = data.get("candidates").or_else(|| data.pointer("/response/candidates"));
+                    if let Some(cands) = candidates.and_then(|c| c.as_array()) {
+                        if let Some(first) = cands.first() {
+                            if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
+                                for part in parts {
+                                    let is_thought = part.get("thought").and_then(|t| t.as_bool()).unwrap_or(false);
+                                    if let Some(t) = part.get("text").and_then(|t| t.as_str()) {
+                                        if is_thought {
+                                            aggregated_thoughts.push_str(t);
+                                        } else if !t.is_empty() {
+                                            text.push_str(t);
+                                        }
                                     }
                                 }
                             }

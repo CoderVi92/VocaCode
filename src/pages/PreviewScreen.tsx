@@ -273,14 +273,19 @@ export default function PreviewScreen() {
             const thinkingBudget = selectedTier?.budget || undefined
 
             // Poin 5 & Complexity: Kirim chatHistory yang sebenarnya (bukan gabungan string hack)
+            // server.cjs baris 480-482: apiProvider menentukan endpoint routing
+            // - API_PROVIDER_OPENAI_VERTEX → streamGenerateContent (GPT-OSS)
+            // - API_PROVIDER_GOOGLE_GEMINI → generateContent (Gemini)
+            // - API_PROVIDER_ANTHROPIC_VERTEX → generateContent (Claude)
             await invoke('execute_model_prompt', {
                 token: activeToken,
                 projectId: projectId || '',
-                model: selectedModel?.id || modelId, // Override modelId with base model id if valid
+                model: selectedModel?.id || modelId,
                 prompt: prompt,
                 history: chatHistory, // Mengirim Vec<ChatMessage> ke Rust
                 thinkingBudget: thinkingBudget, // Mengirim budget integer ke API
-                attachments: attachments.length > 0 ? attachments : null
+                attachments: attachments.length > 0 ? attachments : null,
+                apiProvider: (selectedModel as any)?.apiProvider || null // Provider routing untuk endpoint
             })
 
         } catch (err: any) {

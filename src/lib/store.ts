@@ -52,6 +52,7 @@ export interface AntigravityModel {
     supportedMimeTypes?: string[]
     tiers?: AiModelTier[]
     selectedTierId?: string
+    apiProvider?: string  // Menentukan endpoint routing (server.cjs baris 480-482)
 }
 
 interface AppState {
