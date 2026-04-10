@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
-import { Zap, Terminal, Github, Send, Loader2, Bot, Mic, Paperclip, X } from 'lucide-react'
+import { Zap, Terminal, Github, Send, Loader2, Bot, Mic, Paperclip, X, Brain, Trash2, ChevronDown } from 'lucide-react'
 import { invoke } from '@tauri-apps/api/core'
 import { listen, type UnlistenFn } from '@tauri-apps/api/event'
 import { useAppStore } from '../lib/store'
@@ -9,6 +9,7 @@ import { marked } from 'marked'
 import DOMPurify from 'dompurify'
 import { refreshAccessTokenBasicSafe } from '../lib/auth-basic'
 import { logger } from '../lib/logger'
+import { BASIC_MODELS } from '../lib/models-basic'
 
 interface LogEntry {
     color: string
@@ -21,11 +22,45 @@ interface Attachment {
     data: string
 }
 
+interface UsageData {
+    prompt_tokens: number
+    output_tokens: number
+    thoughts_tokens: number
+    total_tokens: number
+}
+
+interface ErrorDetail {
+    status: number
+    title: string
+    message: string
+    verification_url: string | null
+}
+
 const INITIAL_LOGS: LogEntry[] = [
     { color: 'text-blue-400', text: '> menginisialisasi proses produksi ...' },
     { color: 'text-gray-500', text: '> menghubungi CodePen MCP Server ...' },
     { color: 'text-yellow-500', text: '> gagal menghubungi MCP. Menggunakan template dasar. (MCP not initialized)' },
     { color: 'text-green-500', text: '> sistem siap. Menunggu instruksi AI...' },
+]
+
+// Kamus tanda baca lengkap (server.cjs initVoiceTyping — 16 pemetaan)
+const PUNCTUATION_MAP: [RegExp, string][] = [
+    [/koma/gi, ','],
+    [/titik/gi, '.'],
+    [/tanda tanya/gi, '?'],
+    [/tanda seru/gi, '!'],
+    [/titik dua/gi, ':'],
+    [/titik koma/gi, ';'],
+    [/kurung buka/gi, '('],
+    [/kurung tutup/gi, ')'],
+    [/petik buka/gi, '"'],
+    [/petik tutup/gi, '"'],
+    [/baris baru/gi, '\n'],
+    [/enter/gi, '\n'],
+    [/garis miring/gi, '/'],
+    [/slash/gi, '/'],
+    [/strip/gi, '-'],
+    [/spasi/gi, ' '],
 ]
 
 export default function PreviewScreen() {
@@ -35,7 +70,7 @@ export default function PreviewScreen() {
     const projectId = useAppStore((s) => s.projectId)
     const selectedModel = useAppStore((s) => s.selectedModel)
     const selectedThinkingIndex = useAppStore((s) => s.selectedThinkingIndex)
-    const mode = useAppStore((s: any) => s.mode) // Poin: Kondisi BASIC
+    const mode = useAppStore((s: any) => s.mode)
 
     const [aiInput, setAiInput] = useState('')
     const [aiResponse, setAiResponse] = useState('')
@@ -45,36 +80,52 @@ export default function PreviewScreen() {
     const logsRef = useRef<HTMLDivElement>(null)
     const responseRef = useRef<HTMLDivElement>(null)
     const fileInputRef = useRef<HTMLInputElement>(null)
+    const recognitionRef = useRef<any>(null)
 
-    // Poin 5: Multi-Turn Chat History (Khusus disimulasikan untuk mengingat konteks di BASIC)
+    // Multi-Turn Chat History
     const [chatHistory, setChatHistory] = useState<{role: string, text: string}[]>([])
-    // Poin 8 & 12: Representasi Error Ramah & Auto-Retry
-    const [errorState, setErrorState] = useState<{type: '403' | '429' | '500' | null, message: string, countdown?: number}>({ type: null, message: '' })
-    
-    // Fitur 6: Attachments
+    // Error handling
+    const [errorState, setErrorState] = useState<{type: '403' | '429' | '500' | null, title: string, message: string, verificationUrl?: string | null}>({ type: null, title: '', message: '' })
+    // Attachments
     const [attachments, setAttachments] = useState<Attachment[]>([])
-
-    // Fitur 7: Voice-to-Text (Realtime + Punctuation)
+    // Voice interim
     const [interimSpeech, setInterimSpeech] = useState('')
+    // Thoughts panel (server.cjs Fitur 11)
+    const [aiThoughts, setAiThoughts] = useState('')
+    const [isThoughtsOpen, setIsThoughtsOpen] = useState(false)
+    // Usage metrics (server.cjs Fitur 9)
+    const [usageData, setUsageData] = useState<UsageData | null>(null)
 
-    // Speech to Text logic
+    // Lookup model config lengkap dari BASIC_MODELS (supportsThinking, minThinkingBudget)
+    const getModelConfig = () => {
+        const modelId = selectedModel?.id || ''
+        return BASIC_MODELS.find(m => m.id === modelId) || null
+    }
+
+    // Speech to Text logic — FIXED: continuous:true + full 16-entry punctuation dictionary
     const handleToggleSpeech = () => {
         const SpeechRecognitionInfo = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
         if (!SpeechRecognitionInfo) {
             addLog('text-yellow-500', '> browser Anda tidak mendukung Speech-to-Text.')
             return
         }
-        
-        if (isListening) return // Prevent duplicate
+
+        // Toggle: jika sedang aktif, hentikan
+        if (isListening && recognitionRef.current) {
+            recognitionRef.current.stop()
+            return
+        }
 
         const recognition = new SpeechRecognitionInfo()
-        recognition.lang = 'id-ID' // Bahasa Indonesia
-        recognition.interimResults = true // Poin: Interim Real-time
+        recognition.lang = 'id-ID'
+        recognition.interimResults = true
+        recognition.continuous = true  // FIXED: continuous mode agar tidak terputus saat diam
+        recognitionRef.current = recognition
 
         recognition.onstart = () => {
             setIsListening(true)
             setInterimSpeech('')
-            addLog('text-indigo-400', '> mikrofon aktif, silakan bicara...')
+            addLog('text-indigo-400', '> mikrofon aktif, silakan bicara... (klik lagi untuk stop)')
         }
 
         recognition.onresult = (event: any) => {
@@ -82,12 +133,11 @@ export default function PreviewScreen() {
             let isFinal = false
             for (let i = event.resultIndex; i < event.results.length; ++i) {
                 let chunk = event.results[i][0].transcript
-                
-                // Fitur 7: Punctuation Engine Sederhana
-                chunk = chunk
-                    .replace(/koma/gi, ',')
-                    .replace(/titik/gi, '.')
-                    .replace(/tanda tanya/gi, '?')
+
+                // Apply full punctuation dictionary (16 pemetaan dari server.cjs)
+                for (const [pattern, replacement] of PUNCTUATION_MAP) {
+                    chunk = chunk.replace(pattern, replacement)
+                }
 
                 if (event.results[i].isFinal) {
                     isFinal = true
@@ -97,9 +147,9 @@ export default function PreviewScreen() {
                     interim += chunk
                 }
             }
-            
+
             if (isFinal) {
-                setInterimSpeech('') // Reset interim when final
+                setInterimSpeech('')
             } else {
                 setInterimSpeech(interim)
             }
@@ -111,6 +161,7 @@ export default function PreviewScreen() {
 
         recognition.onend = () => {
             setIsListening(false)
+            recognitionRef.current = null
         }
 
         recognition.start()
@@ -120,14 +171,29 @@ export default function PreviewScreen() {
         const isImage = file.type.startsWith('image/')
         const isVideo = file.type.startsWith('video/')
         const allowedMap = selectedModel?.supportedMimeTypes || []
-        
+
+        // extMap fallback untuk file tanpa MIME type (server.cjs pattern)
+        let mimeType = file.type
+        if (!mimeType) {
+            const ext = file.name.split('.').pop()?.toLowerCase() || ''
+            const extMap: Record<string, string> = {
+                'py': 'application/x-python-code', 'ts': 'text/x-typescript', 'js': 'text/javascript',
+                'md': 'text/markdown', 'json': 'application/json', 'html': 'text/html',
+                'css': 'text/css', 'csv': 'text/csv', 'txt': 'text/plain', 'xml': 'text/xml',
+                'pdf': 'application/pdf', 'rtf': 'application/rtf', 'png': 'image/png',
+                'jpg': 'image/jpeg', 'jpeg': 'image/jpeg', 'webp': 'image/webp',
+                'heic': 'image/heic', 'mp4': 'video/mp4', 'webm': 'video/webm',
+            }
+            mimeType = extMap[ext] || ''
+        }
+
         let isSupported = false
         if (isImage && selectedModel?.supportsImages) isSupported = true
         else if (isVideo && selectedModel?.supportsVideo) isSupported = true
-        else if (allowedMap.includes(file.type)) isSupported = true
+        else if (mimeType && allowedMap.includes(mimeType)) isSupported = true
 
         if (!isSupported) {
-            addLog('text-red-400', `> File ${file.name} (Tipe: ${file.type || 'unknown'}) tidak didukung oleh model AI ini.`)
+            addLog('text-red-400', `> File ${file.name} (Tipe: ${mimeType || 'unknown'}) tidak didukung oleh model AI ini.`)
             return
         }
 
@@ -137,7 +203,7 @@ export default function PreviewScreen() {
             const base64Data = result.split(',')[1]
             setAttachments(prev => [...prev, {
                 name: file.name,
-                mime_type: file.type,
+                mime_type: mimeType,
                 data: base64Data
             }])
             addLog('text-blue-400', `> Lampiran ditambahkan: ${file.name}`)
@@ -173,25 +239,33 @@ export default function PreviewScreen() {
     const VERBOSE_KEYWORDS = ['endpoint', 'HTTP', 'raw', 'payload', 'bearer', 'header', 'Content-Type']
 
     const addLog = (color: string, text: string) => {
-        // Selalu persist ke file log (Desktop/vocacode-debug.log)
         logger.info('SYSTEM-LOG', 'Chat', text)
-
-        // Di BASIC, sembunyikan log teknis dari panel UI
         if (mode === 'BASIC' && VERBOSE_KEYWORDS.some(kw => text.toLowerCase().includes(kw.toLowerCase()))) {
-            return // Tidak tampil di UI, tapi sudah tersimpan di file
+            return
         }
-
         setLogs((prev) => [...prev, { color, text }])
     }
 
-    // Fitur 12: Session Management — Auto reset chat history per model
+    // Session Management — Auto reset chat history per model
     useEffect(() => {
         if (mode === 'BASIC') {
             setChatHistory([])
             setAiResponse('')
+            setAiThoughts('')
+            setUsageData(null)
             setLogs((prev) => [...prev, { color: 'text-gray-500', text: `> riwayat obrolan dibersihkan untuk model: ${selectedModel?.displayName || 'baru'}` }])
         }
     }, [selectedModel?.id, mode])
+
+    // Clear Chat handler
+    const handleClearChat = () => {
+        setChatHistory([])
+        setAiResponse('')
+        setAiThoughts('')
+        setUsageData(null)
+        setErrorState({ type: null, title: '', message: '' })
+        addLog('text-gray-500', '> riwayat obrolan dibersihkan secara manual.')
+    }
 
     const handleSendPrompt = async () => {
         const prompt = aiInput.trim()
@@ -199,15 +273,18 @@ export default function PreviewScreen() {
 
         setAiInput('')
         setAiResponse('')
+        setAiThoughts('')
+        setUsageData(null)
         setIsGenerating(true)
 
         const modelId = selectedModel?.id || 'gemini-3.1-pro-low'
         const modelName = selectedModel?.displayName || modelId
+        const modelConfig = getModelConfig()
 
-        // Poin 8: Mereset state error sebelum mencoba
-        if (mode === 'BASIC') setErrorState({ type: null, message: '' })
+        // Reset error state
+        if (mode === 'BASIC') setErrorState({ type: null, title: '', message: '' })
 
-        // Poin 1 & Complexity: Pastikan token segar sebelum mengirim (seperti server.cjs)
+        // Pastikan token segar sebelum mengirim (server.cjs pattern)
         let activeToken = oauthToken || ''
         const refreshToken = useAppStore.getState().refreshToken
 
@@ -222,22 +299,67 @@ export default function PreviewScreen() {
         addLog('text-indigo-400', `> mengirim instruksi ke ${modelName} ...`)
         addLog('text-gray-500', `> prompt: "${prompt.length > 60 ? prompt.slice(0, 60) + '...' : prompt}"`)
 
-        // Setup SSE listeners
+        // FIXED: Alternating role guard (server.cjs pattern)
+        // Jika history terakhir adalah 'user' (gagal sebelumnya), pop dulu
+        let cleanHistory = [...chatHistory]
+        if (cleanHistory.length > 0 && cleanHistory[cleanHistory.length - 1].role === 'user') {
+            cleanHistory = cleanHistory.slice(0, -1)
+            addLog('text-gray-500', '> membersihkan entry user terakhir yang gagal (role guard).')
+        }
+
+        // Setup event listeners
         let unlistenChunk: UnlistenFn | null = null
         let unlistenComplete: UnlistenFn | null = null
         let unlistenError: UnlistenFn | null = null
+        let unlistenThoughts: UnlistenFn | null = null
+        let unlistenUsage: UnlistenFn | null = null
+        let unlistenErrorDetail: UnlistenFn | null = null
+
+        const cleanup = () => {
+            unlistenChunk?.()
+            unlistenComplete?.()
+            unlistenError?.()
+            unlistenThoughts?.()
+            unlistenUsage?.()
+            unlistenErrorDetail?.()
+        }
 
         try {
             unlistenChunk = await listen<string>('ai_chunk', (event) => {
                 setAiResponse((prev) => prev + event.payload)
             })
 
+            // Listen for thoughts (NEW — server.cjs Fitur 11)
+            unlistenThoughts = await listen<string>('ai_thoughts', (event) => {
+                setAiThoughts(event.payload)
+                setIsThoughtsOpen(true) // Auto-open saat ada thoughts
+            })
+
+            // Listen for usage metadata (NEW — server.cjs Fitur 9)
+            unlistenUsage = await listen<UsageData>('ai_usage', (event) => {
+                setUsageData(event.payload)
+            })
+
+            // Listen for structured error details (NEW — server.cjs getSolution)
+            unlistenErrorDetail = await listen<ErrorDetail>('ai_error_detail', (event) => {
+                const detail = event.payload
+                if (mode === 'BASIC') {
+                    const errorType = detail.status === 403 ? '403' :
+                                      detail.status === 429 ? '429' : '500'
+                    setErrorState({
+                        type: errorType as '403' | '429' | '500',
+                        title: detail.title,
+                        message: detail.message,
+                        verificationUrl: detail.verification_url
+                    })
+                }
+            })
+
             unlistenComplete = await listen('ai_complete', () => {
                 setIsGenerating(false)
                 addLog('text-green-500', '> response AI selesai.')
-                
+
                 if (mode === 'BASIC') {
-                    // Update Poin 5: Menyimpan ke riwayat percakapan khusus mode BASIC
                     setChatHistory(prev => {
                         let finalResponse = ''
                         setAiResponse(curr => { finalResponse = curr; return curr })
@@ -245,40 +367,47 @@ export default function PreviewScreen() {
                     })
                 }
 
-                setAttachments([]) // Remove attachments when chat succeeds
-
-                // Cleanup listeners
-                unlistenChunk?.()
-                unlistenComplete?.()
-                unlistenError?.()
+                setAttachments([])
+                cleanup()
             })
 
             unlistenError = await listen<string>('ai_error', (event) => {
                 setIsGenerating(false)
                 addLog('text-red-400', `> error AI: ${event.payload}`)
-                // Cleanup listeners
-                unlistenChunk?.()
-                unlistenComplete?.()
-                unlistenError?.()
+
+                // Fallback error handling jika ai_error_detail tidak diterima
+                if (mode === 'BASIC' && !errorState.type) {
+                    const errorMsg = event.payload
+                    if (errorMsg.includes('403') || errorMsg.includes('Akses ditolak') || errorMsg.includes('Verifikasi')) {
+                        setErrorState({ type: '403', title: '⚠️ Akses Ditolak', message: errorMsg })
+                    } else if (errorMsg.includes('429') || errorMsg.includes('Terlalu')) {
+                        setErrorState({ type: '429', title: '⏳ Server Sibuk', message: errorMsg })
+                    } else {
+                        setErrorState({ type: '500', title: '❌ Error', message: errorMsg })
+                    }
+                }
+
+                cleanup()
             })
 
+            // Resolve thinking budget + model config from BASIC_MODELS
             const option = selectedModel?.thinkingOptions?.[selectedThinkingIndex]
             const thinkingBudget = option ? option.budget : undefined
 
-            // Poin 5 & Complexity: Kirim chatHistory yang sebenarnya (bukan gabungan string hack)
-            // server.cjs baris 480-482: apiProvider menentukan endpoint routing
-            // - API_PROVIDER_OPENAI_VERTEX → streamGenerateContent (GPT-OSS)
-            // - API_PROVIDER_GOOGLE_GEMINI → generateContent (Gemini)
-            // - API_PROVIDER_ANTHROPIC_VERTEX → generateContent (Claude)
+            // Kirim semua parameter (server.cjs baris 457-496)
+            // supportsThinking & minThinkingBudget diperlukan agar Rust backend
+            // bisa menerapkan budget clamp (server.cjs baris 472-476)
             await invoke('execute_model_prompt', {
                 token: activeToken,
                 projectId: projectId || '',
                 model: selectedModel?.id || modelId,
                 prompt: prompt,
-                history: chatHistory, // Mengirim Vec<ChatMessage> ke Rust
-                thinkingBudget: thinkingBudget, // Mengirim budget integer ke API
+                history: cleanHistory,  // FIXED: gunakan cleanHistory (role guard)
+                thinkingBudget: thinkingBudget,
                 attachments: attachments.length > 0 ? attachments : null,
-                apiProvider: (selectedModel as any)?.apiProvider || null // Provider routing untuk endpoint
+                apiProvider: (selectedModel as any)?.apiProvider || null,
+                supportsThinking: modelConfig?.supportsThinking ?? true,
+                minThinkingBudget: modelConfig?.minThinkingBudget ?? 128,
             })
 
         } catch (err: any) {
@@ -286,41 +415,23 @@ export default function PreviewScreen() {
             const errorMsg = typeof err === 'string' ? err : err?.message || 'Unknown error'
             addLog('text-red-400', `> gagal menghubungi AI: ${errorMsg}`)
 
-            // Poin 8 & 12: Deteksi Spesifik Error Khusus mode BASIC
-            if (mode === 'BASIC') {
-                if (errorMsg.includes('Akses ditolak') || errorMsg.includes('403')) {
-                    setErrorState({ type: '403', message: 'Akun Anda kemungkinan membutuhkan Verifikasi Nomor HP di Google Cloud Console.' })
-                } else if (errorMsg.includes('429') || errorMsg.includes('Terlalu banyak permintaan')) {
-                    // Poin 12: Mekanisme Auto-Retry
-                    addLog('text-yellow-400', '> mendeteksi limit 429/503. Mengaktifkan auto-retry (Poin 12)...')
-                    let countdown = 3
-                    setErrorState({ type: '429', message: 'Teguran Rate Limit diterima. Server akan mencoba mengetuk ulang secara otomatis.', countdown: countdown })
-                    
-                    const interval = setInterval(() => {
-                        countdown -= 1
-                        setErrorState(prev => ({ ...prev, countdown }))
-                        if (countdown <= 0) {
-                            clearInterval(interval)
-                            // Auto Retry Action (Poin 12)
-                            setErrorState({ type: null, message: '' })
-                            addLog('text-indigo-400', '> Auto-retry trigger dieksekusi.')
-                            setAiInput(prompt) // Mengembalikan prompt
-                            setTimeout(() => document.getElementById('btn-send-prompt')?.click(), 500)
-                        }
-                    }, 1000)
-                } else if (errorMsg.includes('404') || errorMsg.includes('NOT_FOUND') || errorMsg.includes('entity was not found')) {
-                    // Poin 8 Refinement: Deteksi Project / Model ID tidak ditemukan
-                    setErrorState({ type: '500', message: 'Project ID atau Model ID tidak ditemukan (404). Pastikan Model terpilih tersedia pada akun Anda.' })
-                } else if (errorMsg.includes('503') || errorMsg.includes('500') || errorMsg.includes('sedang penuh') || errorMsg.includes('kapasitas') || errorMsg.includes('habis')) {
-                    // Poin 8: 503 Capacity & 500 Thinking Solution
-                    setErrorState({ type: '500', message: 'Model berkapasitas penuh atau kuota terlampaui. Solusi: Ubah "Perencanaan" ke tingkat yang lebih rendah atau ganti Model AI lain.' })
+            // NOTE: Auto-retry DIHAPUS dari frontend (backend handles retry via 3x backoff)
+            // Frontend cukup menampilkan error dari backend
+            if (mode === 'BASIC' && !errorState.type) {
+                if (errorMsg.includes('403') || errorMsg.includes('Akses ditolak')) {
+                    setErrorState({ type: '403', title: '⚠️ Akses Ditolak', message: errorMsg })
+                } else if (errorMsg.includes('429') || errorMsg.includes('Terlalu')) {
+                    setErrorState({ type: '429', title: '⏳ Server Sibuk', message: 'Server sedang sibuk. Backend sudah mencoba ulang secara otomatis.' })
+                } else if (errorMsg.includes('404') || errorMsg.includes('NOT_FOUND')) {
+                    setErrorState({ type: '500', title: '❓ Tidak Ditemukan', message: 'Model atau Project ID tidak ditemukan. Pastikan model tersedia pada akun Anda.' })
+                } else if (errorMsg.includes('500') || errorMsg.includes('503') || errorMsg.includes('penuh') || errorMsg.includes('habis')) {
+                    setErrorState({ type: '500', title: '💥 Error Server', message: 'Model berkapasitas penuh. Solusi: Ubah Tingkat Berpikir ke level yang lebih rendah atau ganti Model AI lain.' })
+                } else {
+                    setErrorState({ type: '500', title: '❌ Error', message: errorMsg })
                 }
             }
 
-            // Cleanup listeners on error
-            unlistenChunk?.()
-            unlistenComplete?.()
-            unlistenError?.()
+            cleanup()
 
             // Fallback response for browser preview without Tauri
             if (errorMsg.includes('not a function') || errorMsg.includes('__TAURI__') || errorMsg.includes('Could not resolve')) {
@@ -337,6 +448,17 @@ export default function PreviewScreen() {
             handleSendPrompt()
         }
     }
+
+    // Usage metrics helper
+    const UsageBar = ({ label, used, color }: { label: string, used: number, color: string }) => (
+        <div className="flex items-center gap-2">
+            <span className="text-[9px] text-gray-500 w-14 shrink-0">{label}</span>
+            <div className="flex-1 h-1.5 bg-white/5 rounded-full overflow-hidden">
+                <div className={`h-full rounded-full transition-all duration-500 ${color}`} style={{ width: `${Math.min(used, 100)}%` }} />
+            </div>
+            <span className="text-[9px] text-gray-600 w-10 text-right">{used.toLocaleString()}</span>
+        </div>
+    )
 
     const previewHtml = `<!DOCTYPE html>
 <html lang="id">
@@ -371,7 +493,7 @@ export default function PreviewScreen() {
                 initial={{ opacity: 0, x: -16 }}
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ duration: 0.4, ease: [0.22, 1, 0.36, 1] }}
-                className="w-full md:w-80 flex flex-col gap-4 h-full py-4 shrink-0"
+                className="w-full md:w-80 flex flex-col gap-3 h-full py-4 shrink-0 overflow-y-auto"
             >
                 {/* AI Refinement Panel */}
                 <div className="bg-[#11141b] rounded-xl border border-white/5 p-4 flex flex-col gap-3 shadow-xl">
@@ -380,11 +502,23 @@ export default function PreviewScreen() {
                             <Zap size={16} fill="currentColor" />
                             <span className="text-xs font-bold uppercase tracking-wider">AI Refinement</span>
                         </div>
-                        {selectedModel && (
-                            <span className="text-[9px] font-bold text-indigo-300/60 uppercase tracking-wider bg-indigo-600/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
-                                {selectedModel.displayName}
-                            </span>
-                        )}
+                        <div className="flex items-center gap-2">
+                            {/* Clear Chat Button */}
+                            {chatHistory.length > 0 && (
+                                <button
+                                    onClick={handleClearChat}
+                                    className="p-1 rounded text-gray-600 hover:text-red-400 transition-colors"
+                                    title="Bersihkan riwayat obrolan"
+                                >
+                                    <Trash2 size={12} />
+                                </button>
+                            )}
+                            {selectedModel && (
+                                <span className="text-[9px] font-bold text-indigo-300/60 uppercase tracking-wider bg-indigo-600/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
+                                    {selectedModel.displayName}
+                                </span>
+                            )}
+                        </div>
                     </div>
                     <p className="text-[10px] text-gray-500 leading-relaxed">
                         Kirim instruksi ke AI untuk memodifikasi website. Tekan Enter untuk mengirim.
@@ -404,8 +538,8 @@ export default function PreviewScreen() {
                                 {interimSpeech}
                             </div>
                         )}
-                        
-                        {/* Multi-file Accumulate Badge (Fitur 6) */}
+
+                        {/* Multi-file Accumulate Badge */}
                         {attachments.length > 0 && (
                             <div className="absolute left-3 bottom-3 flex gap-2">
                                 {attachments.map((att, idx) => (
@@ -418,7 +552,6 @@ export default function PreviewScreen() {
                         )}
 
                         <div className="absolute right-2 bottom-2 flex flex-col gap-1">
-                            {/* File Picker Picker (Fitur 6) */}
                             <button
                                 onClick={() => fileInputRef.current?.click()}
                                 className="p-1 rounded bg-white/5 text-gray-500 hover:text-indigo-400 transition-colors flex items-center justify-center mx-auto"
@@ -431,7 +564,7 @@ export default function PreviewScreen() {
                             <button
                                 onClick={handleToggleSpeech}
                                 className={`p-1 flex items-center justify-center rounded transition-colors ${isListening ? 'bg-red-500/20 text-red-500 animate-pulse' : 'bg-white/5 text-gray-500 hover:text-indigo-400'}`}
-                                title="Dikte Suara (Voice to Text)"
+                                title={isListening ? 'Stop Dikte Suara' : 'Dikte Suara (Voice to Text)'}
                             >
                                 <Mic size={14} />
                             </button>
@@ -460,7 +593,7 @@ export default function PreviewScreen() {
                     </button>
                 </div>
 
-                {/* UI Error Khusus Mode BASIC (Poin 8 & 12) */}
+                {/* Error Panel — Structured (server.cjs getSolution matching) */}
                 <AnimatePresence>
                     {mode === 'BASIC' && errorState.type && (
                         <motion.div
@@ -474,23 +607,50 @@ export default function PreviewScreen() {
                             }`}
                         >
                             <span className="text-[10px] font-bold uppercase tracking-widest text-white px-2 py-0.5 rounded bg-black/40 w-fit">
-                                {errorState.type === '403' ? 'AKUN MEMBUTUHKAN VERIFIKASI (403)' : 
-                                 errorState.type === '429' ? 'SERVER SIBUK - AUTO RETRY (429/503)' : 'KESALAHAN PARAMETER (500)'}
+                                {errorState.title || (errorState.type === '403' ? 'AKSES DITOLAK (403)' :
+                                 errorState.type === '429' ? 'SERVER SIBUK (429)' : 'KESALAHAN (500)')}
                             </span>
                             <p className="text-xs text-gray-300 leading-relaxed">
                                 {errorState.message}
                             </p>
-                            
-                            {errorState.type === '403' && (
+
+                            {/* Verification link (server.cjs: verificationUrl) */}
+                            {errorState.type === '403' && errorState.verificationUrl && (
+                                <a href={errorState.verificationUrl} target="_blank" rel="noreferrer" className="mt-2 block w-full text-center py-2 bg-violet-600 hover:bg-violet-500 text-white rounded-lg text-[11px] font-bold cursor-pointer transition-colors">
+                                    Verifikasi Nomor HP Anda Sekarang
+                                </a>
+                            )}
+                            {errorState.type === '403' && !errorState.verificationUrl && (
                                 <a href="https://console.cloud.google.com/" target="_blank" rel="noreferrer" className="mt-2 block w-full text-center py-2 bg-red-600 hover:bg-red-500 text-white rounded-lg text-[11px] font-bold cursor-pointer transition-colors">
                                     Buka Google Cloud Console
                                 </a>
                             )}
-                            
-                            {errorState.type === '429' && errorState.countdown !== undefined && (
-                                <div className="mt-2 w-full py-2 bg-yellow-500/20 rounded-lg flex items-center justify-center gap-2">
-                                    <Loader2 size={14} className="animate-spin text-yellow-400" />
-                                    <span className="text-xs font-bold text-yellow-500">Mencoba otomatis dalam {errorState.countdown} detik...</span>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
+                {/* Thoughts Panel — NEW (server.cjs Fitur 11: Thinking Visualization) */}
+                <AnimatePresence>
+                    {aiThoughts && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="bg-[#11141b] rounded-xl border border-violet-500/20 overflow-hidden shadow-xl"
+                        >
+                            <button
+                                onClick={() => setIsThoughtsOpen(!isThoughtsOpen)}
+                                className="w-full px-4 py-2.5 border-b border-white/5 flex items-center gap-2 hover:bg-white/5 transition-colors cursor-pointer"
+                            >
+                                <Brain size={14} className="text-violet-400" />
+                                <span className="text-[10px] font-bold text-violet-300 uppercase tracking-wider">Proses Berpikir AI</span>
+                                <ChevronDown size={10} className={`text-gray-500 ml-auto transition-transform duration-200 ${isThoughtsOpen ? 'rotate-180' : ''}`} />
+                            </button>
+                            {isThoughtsOpen && (
+                                <div
+                                    className="p-4 max-h-36 overflow-y-auto text-[10px] text-violet-300/80 leading-relaxed font-mono whitespace-pre-wrap bg-violet-950/20"
+                                >
+                                    {aiThoughts}
                                 </div>
                             )}
                         </motion.div>
@@ -520,14 +680,38 @@ export default function PreviewScreen() {
                     )}
                 </AnimatePresence>
 
+                {/* Usage Metrics — NEW (server.cjs usageMetadata visualization) */}
+                <AnimatePresence>
+                    {usageData && (
+                        <motion.div
+                            initial={{ opacity: 0, height: 0 }}
+                            animate={{ opacity: 1, height: 'auto' }}
+                            exit={{ opacity: 0, height: 0 }}
+                            className="bg-[#11141b] rounded-xl border border-white/5 p-3 shadow-xl"
+                        >
+                            <span className="text-[9px] font-bold text-gray-600 uppercase tracking-widest mb-2 block">Penggunaan Token</span>
+                            <div className="space-y-1.5">
+                                <UsageBar label="Prompt" used={usageData.prompt_tokens} color="bg-blue-500" />
+                                <UsageBar label="Output" used={usageData.output_tokens} color="bg-green-500" />
+                                {usageData.thoughts_tokens > 0 && (
+                                    <UsageBar label="Thoughts" used={usageData.thoughts_tokens} color="bg-violet-500" />
+                                )}
+                                <div className="flex items-center justify-between pt-1 border-t border-white/5">
+                                    <span className="text-[9px] text-gray-500">Total</span>
+                                    <span className="text-[9px] text-gray-400 font-bold">{usageData.total_tokens.toLocaleString()} tokens</span>
+                                </div>
+                            </div>
+                        </motion.div>
+                    )}
+                </AnimatePresence>
+
                 {/* System Logs */}
-                <div className="flex-1 bg-[#090b0f] rounded-xl border border-white/5 p-4 overflow-hidden flex flex-col min-h-[140px]">
+                <div className="flex-1 bg-[#090b0f] rounded-xl border border-white/5 p-4 overflow-hidden flex flex-col min-h-[100px]">
                     <div className="flex items-center justify-between mb-3">
                         <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest">System Logs</span>
                         <Terminal size={12} className="text-gray-700" />
                     </div>
                     <div ref={logsRef} className="flex-1 font-mono text-[9px] space-y-1.5 overflow-y-auto pr-1">
-                        {/* Fitur 11: BASIC hanya tampilkan 10 log terakhir */}
                         {(mode === 'BASIC' ? logs.slice(-10) : logs).map((log, i) => (
                             <motion.p
                                 key={`${i}-${log.text.slice(0, 20)}`}

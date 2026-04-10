@@ -315,12 +315,21 @@ export default function App() {
                     className="flex items-center bg-[#1e2330] rounded-md px-3 py-1.5 cursor-pointer border border-white/5 hover:border-white/10 transition-colors"
                   >
                     <div className="flex items-center gap-2 text-[11px] text-gray-400 group">
-                      <span className="group-hover:text-gray-200 transition-colors">Tingkat Berpikir</span>
+                      <span className="group-hover:text-gray-200 transition-colors">Berpikir</span>
                     </div>
                     <div className="h-3 w-px bg-white/10 mx-3" />
                     <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
                       <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
-                        {selectedModel.thinkingOptions[selectedThinkingIndex]?.label || 'Default'}
+                        {(() => {
+                          const label = selectedModel.thinkingOptions[selectedThinkingIndex]?.label || 'Default'
+                          if (mode === 'BASIC') {
+                            // Simplify labels for BASIC mode
+                            if (label.toLowerCase().includes('linear') || label.toLowerCase().includes('rendah')) return '⚡ Cepat'
+                            if (label.toLowerCase().includes('sistematis') || label.toLowerCase().includes('medium') || label.toLowerCase().includes('sedang')) return '🧠 Mendalam'
+                            if (label.toLowerCase().includes('kompleks') || label.toLowerCase().includes('tinggi') || label.toLowerCase().includes('terpinci')) return '🔬 Terpinci'
+                          }
+                          return label
+                        })()}
                       </span>
                       <ChevronDown size={11} className={`text-gray-500 transition-transform duration-200 ${isThinkingSelectorOpen ? 'rotate-180' : ''}`} />
                     </div>
@@ -335,7 +344,7 @@ export default function App() {
                         transition={{ duration: 0.15, ease: 'easeOut' }}
                         className="absolute top-10 left-0 w-48 bg-[#161920] border border-white/10 rounded-xl shadow-2xl py-2 z-[100]"
                       >
-                        <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Tingkat Berpikir</p>
+                        <p className="px-4 py-1.5 text-[9px] font-bold text-gray-600 uppercase tracking-widest">Berpikir</p>
                         {selectedModel.thinkingOptions.map((opt: any, index: number) => {
                           const isSelected = selectedThinkingIndex === index
                           return (
@@ -349,7 +358,16 @@ export default function App() {
                                 isSelected ? 'bg-indigo-600/10 text-indigo-300' : 'text-gray-300 hover:bg-white/5'
                               }`}
                             >
-                              <span className="text-[11px] font-bold">{opt.label}</span>
+                              <span className="text-[11px] font-bold">{
+                                (() => {
+                                  if (mode === 'BASIC') {
+                                    if (opt.label.toLowerCase().includes('linear') || opt.label.toLowerCase().includes('rendah')) return '⚡ Cepat'
+                                    if (opt.label.toLowerCase().includes('sistematis') || opt.label.toLowerCase().includes('medium') || opt.label.toLowerCase().includes('sedang')) return '🧠 Mendalam'
+                                    if (opt.label.toLowerCase().includes('kompleks') || opt.label.toLowerCase().includes('tinggi') || opt.label.toLowerCase().includes('terpinci')) return '🔬 Terpinci'
+                                  }
+                                  return opt.label
+                                })()
+                              }</span>
                               {isSelected && <CheckCircle2 size={12} className="text-indigo-400" />}
                             </button>
                           )
@@ -373,7 +391,11 @@ export default function App() {
                   <div className="flex items-center gap-2 text-[11px] text-indigo-300 font-bold group">
                     <span className="group-hover:text-indigo-200 transition-colors uppercase tracking-wide">
                       {selectedModel?.displayName || 'Loading AI...'}
-                      {mode === 'BASIC' && selectedModel?.quotaPercent !== undefined ? ` | ${selectedModel.quotaPercent}%` : ''}
+                      {mode === 'BASIC' && selectedModel?.quotaPercent !== undefined ? (() => {
+                        const pct = selectedModel.quotaPercent
+                        const color = pct > 50 ? 'text-green-400' : pct > 20 ? 'text-yellow-400' : 'text-red-400'
+                        return <span className={`ml-1 ${color}`}>| {pct}%</span>
+                      })() : ''}
                     </span>
                     <ChevronDown size={11} className={`text-gray-500 transition-transform duration-200 ${isModelSelectorOpen ? 'rotate-180' : ''}`} />
                   </div>
@@ -405,7 +427,12 @@ export default function App() {
                             >
                               <div className="flex flex-col">
                                 <span className={`text-[11px] font-bold ${isSelected ? 'text-indigo-300' : 'text-gray-300'}`}>
-                                  {model.displayName} {mode === 'BASIC' && model.quotaPercent !== undefined ? `| ${model.quotaPercent}%` : ''}
+                                  {model.displayName}
+                                  {mode === 'BASIC' && model.quotaPercent !== undefined ? (() => {
+                                    const pct = model.quotaPercent
+                                    const color = pct > 50 ? 'text-green-400' : pct > 20 ? 'text-yellow-400' : 'text-red-400'
+                                    return <span className={`ml-1 ${color}`}>| {pct}%</span>
+                                  })() : ''}
                                 </span>
                                 <span className="text-[9px] text-gray-600 mt-0.5">{model.description}</span>
                               </div>
@@ -507,10 +534,12 @@ export default function App() {
                              isAuthenticated: false,
                            oauthToken: null,
                              refreshToken: null,
+                             tokenExpiresAt: null,
                              projectId: null,
                              aiModels: [],
                              userName: null,
                              userEmail: null,
+                             selectedModel: null,
                           })
                           navigate('login') 
                         }}

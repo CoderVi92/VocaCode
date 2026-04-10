@@ -419,6 +419,56 @@ fn get_api_method(api_provider: &str) -> &'static str {
     }
 }
 
+/// Struktur untuk mengirim usage metadata ke frontend
+#[derive(serde::Serialize, Clone)]
+struct UsagePayload {
+    prompt_tokens: u64,
+    output_tokens: u64,
+    thoughts_tokens: u64,
+    total_tokens: u64,
+}
+
+/// Struktur untuk mengirim error terstruktur ke frontend (matching server.cjs getSolution)
+#[derive(serde::Serialize, Clone)]
+struct ErrorPayload {
+    status: u16,
+    title: String,
+    message: String,
+    verification_url: Option<String>,
+}
+
+/// Parse verification URL dari error.details[].links[] (server.cjs getSolution baris 632-641)
+fn extract_verification_url(json: &Value) -> Option<String> {
+    let details = json.pointer("/error/details")
+        .or_else(|| json.pointer("/response/error/details"))
+        .and_then(|d| d.as_array())?;
+    for detail in details {
+        if let Some(links) = detail.get("links").and_then(|l| l.as_array()) {
+            for link in links {
+                let desc = link.get("description").and_then(|d| d.as_str()).unwrap_or("");
+                if desc.contains("Verify") || desc.contains("verify") {
+                    if let Some(url) = link.get("url").and_then(|u| u.as_str()) {
+                        return Some(url.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Extract usageMetadata dari response (server.cjs baris 570)
+fn extract_usage(data: &Value) -> Option<UsagePayload> {
+    let usage = data.pointer("/response/usageMetadata")
+        .or_else(|| data.get("usageMetadata"))?;
+    Some(UsagePayload {
+        prompt_tokens: usage.get("promptTokenCount").and_then(|v| v.as_u64()).unwrap_or(0),
+        output_tokens: usage.get("candidatesTokenCount").and_then(|v| v.as_u64()).unwrap_or(0),
+        thoughts_tokens: usage.get("thoughtsTokenCount").and_then(|v| v.as_u64()).unwrap_or(0),
+        total_tokens: usage.get("totalTokenCount").and_then(|v| v.as_u64()).unwrap_or(0),
+    })
+}
+
 #[tauri::command]
 async fn fetch_gemini_models_with_quota(access_token: String, project_id: String) -> Result<Vec<AntigravityModel>, String> {
     // 6 model terpisah — 1:1 match dengan server.cjs MODELS[] (baris 63-112)
@@ -656,9 +706,11 @@ async fn execute_model_prompt(
     model: String, 
     prompt: String, 
     history: Vec<ChatMessage>, 
-    thinking_budget: Option<u32>,
+    thinking_budget: Option<i32>,
     attachments: Option<Vec<FileAttachment>>,
-    api_provider: Option<String>
+    api_provider: Option<String>,
+    supports_thinking: Option<bool>,
+    min_thinking_budget: Option<i32>
 ) -> Result<(), String> {
     let effective_project = if project_id.trim().is_empty() {
         DEFAULT_PROJECT_ID.to_string()
@@ -668,6 +720,7 @@ async fn execute_model_prompt(
 
     // Resolve apiProvider (dari frontend, atau default ke Gemini)
     let api_provider = api_provider.unwrap_or_else(|| "API_PROVIDER_GOOGLE_GEMINI".to_string());
+    let model_supports_thinking = supports_thinking.unwrap_or(true);
 
     // Poin 5: Multi-Turn Chat (Konstruksi Array Contents)
     let mut contents = Vec::new();
@@ -701,20 +754,44 @@ async fn execute_model_prompt(
     }));
 
     // server.cjs baris 486-496: Konstruksi request payload dengan thinkingConfig
+    // PENTING: Mengikuti logika server.cjs baris 468-496 secara presisi:
+    //  1. Cek supportsThinking (server.cjs baris 489)
+    //  2. Jika budget = -1, tetap kirim thinkingConfig (Gemini Flash dynamic)
+    //  3. Clamp budget ke minBudget jika di bawah minimum (server.cjs baris 474)
     let mut request_obj = serde_json::json!({
         "contents": contents
     });
 
-    if let Some(budget) = thinking_budget {
-        // Hanya tambahkan thinkingConfig jika budget valid (> 0)
-        // Nilai -1 atau <= 0 berarti default/tidak didukung (seperti GPT-OSS) sehingga mencegah API merespon 400
-        if budget > 0 {
+    // Hanya tambahkan thinkingConfig jika model mendukung thinking (server.cjs baris 489)
+    if model_supports_thinking {
+        let mut t_budget = thinking_budget.unwrap_or(-1) as i64;
+        let min_budget = min_thinking_budget.unwrap_or(128) as i64;
+
+        // Safety clamp: jangan kirim budget di bawah min model (server.cjs baris 472-476)
+        if t_budget != -1 && t_budget < min_budget {
+            t_budget = min_budget;
+            let _ = write_debug_log("Kelompok 2 - Antigravity API".into(), "BudgetClamp".into(),
+                format!("Budget di-clamp ke minimum: {}", min_budget));
+        }
+
+        if t_budget == -1 {
+            // budget -1 = dynamic (Gemini Flash): kirim tanpa thinkingBudget field  
+            // agar API yang memutuskan sendiri
+            request_obj.as_object_mut().unwrap().insert(
+                "generationConfig".to_string(),
+                serde_json::json!({
+                    "thinkingConfig": {
+                        "includeThoughts": true
+                    }
+                })
+            );
+        } else {
             request_obj.as_object_mut().unwrap().insert(
                 "generationConfig".to_string(),
                 serde_json::json!({
                     "thinkingConfig": {
                         "includeThoughts": true,
-                        "thinkingBudget": budget
+                        "thinkingBudget": t_budget
                     }
                 })
             );
@@ -871,24 +948,60 @@ async fn execute_model_prompt(
         if success {
             if let Some(data) = response_data {
                 // Check API-level error JSON (bisa di level root atau nested di response)
-                let error_json = data.get("error").or_else(|| data.pointer("/response/error"));
+                // Matching server.cjs: cek juga error di level array (stream response)
+                let error_json = data.get("error")
+                    .or_else(|| data.pointer("/response/error"));
                 if let Some(err) = error_json {
                     let err_code = err.get("code").and_then(|c| c.as_u64()).unwrap_or(0);
                     let err_status = err.get("status").and_then(|s| s.as_str()).unwrap_or("");
                     let raw_msg = err.get("message").and_then(|m| m.as_str()).unwrap_or("Error tidak diketahui dari API");
 
-                    let friendly_msg = if err_status == "RESOURCE_EXHAUSTED" || raw_msg.contains("quota") {
-                        format!("Kuota untuk model {} sudah habis. Coba gunakan model lain.", model)
+                    // Parse verification URL (server.cjs getSolution baris 632-641)
+                    let verification_url = extract_verification_url(&data);
+
+                    // Matching server.cjs getSolution untuk pesan ramah
+                    let (title, friendly_msg) = if err_code == 403 {
+                        if raw_msg.contains("Verify") || raw_msg.contains("verification") || raw_msg.contains("restricted") || verification_url.is_some() {
+                            ("⚠️ Akun Butuh Verifikasi Nomor HP".to_string(),
+                             "Google menolak karena mendeteksi aktivitas mencurigakan atau butuh verifikasi nomor HP.".to_string())
+                        } else {
+                            ("📉 Layanan Belum Aktif / Ditolak".to_string(),
+                             format!("Model / layanan AI ini belum diaktifkan untuk akun Anda. Coba ganti model AI lain."))
+                        }
+                    } else if err_status == "RESOURCE_EXHAUSTED" || raw_msg.contains("quota") {
+                        // Extract waktu reset jika ada (server.cjs baris 668)
+                        let reset_info = if let Some(caps) = raw_msg.find("reset after") {
+                            format!(" Jeda tunggu: {}", &raw_msg[caps..])
+                        } else { String::new() };
+                        ("🛑 Kuota Model Sudah Habis".to_string(),
+                         format!("Kuota untuk model {} sudah habis.{} Coba gunakan model lain.", model, reset_info))
                     } else if err_code == 503 || raw_msg.contains("No capacity") {
-                        format!("Model {} sedang penuh. Coba beberapa saat lagi atau gunakan model lain.", model)
+                        ("⏳ Model Sedang Penuh".to_string(),
+                         format!("Model {} sedang penuh (kapasitas habis). Coba beberapa saat lagi atau gunakan model lain.", model))
                     } else if err_code == 429 {
-                        format!("Terlalu banyak permintaan. Tunggu sebentar lalu coba lagi.")
+                        ("⏳ Terlalu Cepat".to_string(),
+                         "Anda mengirim pesan terlalu cepat. Tunggu sebentar lalu coba lagi.".to_string())
                     } else if err_code == 404 || err_status == "NOT_FOUND" {
-                        format!("Error API (404): {} — Model '{}' tidak ditemukan. Pastikan Model terpilih tersedia.", raw_msg, model)
+                        ("❓ Model Tidak Ditemukan".to_string(),
+                         format!("Model '{}' tidak ditemukan. Pastikan model tersedia untuk akun Anda.", model))
+                    } else if err_code == 500 {
+                        ("💥 Error Internal Server (500)".to_string(),
+                         "Server Google mengalami crash internal. Coba turunkan Tingkat Berpikir ke level yang lebih rendah.".to_string())
+                    } else if err_code == 400 && raw_msg.contains("Project") {
+                        ("📁 Masalah Project ID".to_string(),
+                         "Project ID tidak valid. Silakan login ulang.".to_string())
                     } else {
-                        format!("Error AI: {}", raw_msg)
+                        ("Error AI".to_string(), format!("Error AI: {}", raw_msg))
                     };
 
+                    // Emit structured error (bukan string biasa)
+                    let error_payload = ErrorPayload {
+                        status: err_code as u16,
+                        title,
+                        message: friendly_msg.clone(),
+                        verification_url,
+                    };
+                    let _ = app.emit("ai_error_detail", &error_payload);
                     let _ = app.emit("ai_error", &friendly_msg);
                     return Err(friendly_msg);
                 }
@@ -897,8 +1010,10 @@ async fn execute_model_prompt(
                 let mut text = aggregated_text.clone();
 
                 // Untuk non-stream atau jika aggregated kosong: extract dari response langsung
+                // Matching server.cjs baris 553-565
                 if text.is_empty() {
-                    let candidates = data.get("candidates").or_else(|| data.pointer("/response/candidates"));
+                    let candidates = data.get("candidates")
+                        .or_else(|| data.pointer("/response/candidates"));
                     if let Some(cands) = candidates.and_then(|c| c.as_array()) {
                         if let Some(first) = cands.first() {
                             if let Some(parts) = first.pointer("/content/parts").and_then(|p| p.as_array()) {
@@ -919,6 +1034,16 @@ async fn execute_model_prompt(
 
                 if text.is_empty() {
                     text = "(Respon kosong — model tidak mengembalikan teks)".to_string();
+                }
+
+                // Emit thoughts SEBELUM text (server.cjs menampilkan thoughts panel di atas response)
+                if !aggregated_thoughts.is_empty() {
+                    let _ = app.emit("ai_thoughts", aggregated_thoughts.as_str());
+                }
+
+                // Emit usage metadata (server.cjs baris 570: data.response?.usageMetadata || data.usageMetadata)
+                if let Some(usage) = extract_usage(&data) {
+                    let _ = app.emit("ai_usage", &usage);
                 }
 
                 let _ = app.emit("ai_chunk", text.as_str());
