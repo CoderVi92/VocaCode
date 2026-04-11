@@ -314,6 +314,7 @@ export default function PreviewScreen() {
         let unlistenThoughts: UnlistenFn | null = null
         let unlistenUsage: UnlistenFn | null = null
         let unlistenErrorDetail: UnlistenFn | null = null
+        let unlistenRetry: UnlistenFn | null = null
 
         const cleanup = () => {
             unlistenChunk?.()
@@ -322,11 +323,17 @@ export default function PreviewScreen() {
             unlistenThoughts?.()
             unlistenUsage?.()
             unlistenErrorDetail?.()
+            unlistenRetry?.()
         }
 
         try {
             unlistenChunk = await listen<string>('ai_chunk', (event) => {
                 setAiResponse((prev) => prev + event.payload)
+            })
+
+            // Listen for retry status — tampilkan di System Logs saja, BUKAN di response bubble
+            unlistenRetry = await listen<string>('ai_retry', (event) => {
+                addLog('text-yellow-500', `> ${event.payload}`)
             })
 
             // Listen for thoughts (NEW — server.cjs Fitur 11)
@@ -682,7 +689,7 @@ export default function PreviewScreen() {
 
                 {/* Usage Metrics — NEW (server.cjs usageMetadata visualization) */}
                 <AnimatePresence>
-                    {usageData && (
+                    {usageData && mode !== 'BASIC' && (
                         <motion.div
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: 'auto' }}
@@ -705,14 +712,15 @@ export default function PreviewScreen() {
                     )}
                 </AnimatePresence>
 
-                {/* System Logs */}
+                {/* System Logs — hanya tampil di mode ADVANCE */}
+                {mode !== 'BASIC' && (
                 <div className="flex-1 bg-[#090b0f] rounded-xl border border-white/5 p-4 overflow-hidden flex flex-col min-h-[100px]">
                     <div className="flex items-center justify-between mb-3">
                         <span className="text-[10px] font-bold text-gray-600 uppercase tracking-widest">System Logs</span>
                         <Terminal size={12} className="text-gray-700" />
                     </div>
                     <div ref={logsRef} className="flex-1 font-mono text-[9px] space-y-1.5 overflow-y-auto pr-1">
-                        {(mode === 'BASIC' ? logs.slice(-10) : logs).map((log, i) => (
+                        {logs.map((log, i) => (
                             <motion.p
                                 key={`${i}-${log.text.slice(0, 20)}`}
                                 initial={{ opacity: 0, x: -8 }}
@@ -725,6 +733,7 @@ export default function PreviewScreen() {
                         ))}
                     </div>
                 </div>
+                )}
             </motion.div>
 
             {/* Right — Live Preview */}

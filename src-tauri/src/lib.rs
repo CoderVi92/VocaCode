@@ -1056,7 +1056,7 @@ async fn execute_model_prompt(
         if should_retry {
             let wait_secs = attempt as u64 * 3;
             let retry_msg = format!("⏳ Percobaan {}/{} — menunggu {}s (error {})...", attempt, max_retries, wait_secs, retry_status);
-            let _ = app.emit("ai_chunk", retry_msg.as_str());
+            let _ = app.emit("ai_retry", retry_msg.as_str());
 
             // Async sleep
             let (tx, rx) = std::sync::mpsc::channel();
