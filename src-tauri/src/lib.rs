@@ -784,27 +784,37 @@ async fn execute_model_prompt(
                 format!("Budget di-clamp ke minimum: {}", min_budget));
         }
 
+        // PENTING: Antigravity Anthropic Wrapper membutuhkan maxOutputTokens ketika thinking diaktifkan.
+        // Jika tidak, API Anthropic merespons dengan "max_tokens: Field required" (atau "message: Field required").
+        // Kita menggunakan batas default yang aman (mis. 64000).
+        let max_output_tokens = if api_provider == "API_PROVIDER_ANTHROPIC_VERTEX" {
+            Some(64_000)
+        } else {
+            None
+        };
+
         if t_budget == -1 {
             // budget -1 = dynamic (Gemini Flash): kirim tanpa thinkingBudget field  
-            // agar API yang memutuskan sendiri
-            request_obj.as_object_mut().unwrap().insert(
-                "generationConfig".to_string(),
-                serde_json::json!({
-                    "thinkingConfig": {
-                        "includeThoughts": true
-                    }
-                })
-            );
+            let mut gen_config = serde_json::json!({
+                "thinkingConfig": {
+                    "includeThoughts": true
+                }
+            });
+            if let Some(tokens) = max_output_tokens {
+                gen_config.as_object_mut().unwrap().insert("maxOutputTokens".to_string(), serde_json::json!(tokens));
+            }
+            request_obj.as_object_mut().unwrap().insert("generationConfig".to_string(), gen_config);
         } else {
-            request_obj.as_object_mut().unwrap().insert(
-                "generationConfig".to_string(),
-                serde_json::json!({
-                    "thinkingConfig": {
-                        "includeThoughts": true,
-                        "thinkingBudget": t_budget
-                    }
-                })
-            );
+            let mut gen_config = serde_json::json!({
+                "thinkingConfig": {
+                    "includeThoughts": true,
+                    "thinkingBudget": t_budget
+                }
+            });
+            if let Some(tokens) = max_output_tokens {
+                gen_config.as_object_mut().unwrap().insert("maxOutputTokens".to_string(), serde_json::json!(tokens));
+            }
+            request_obj.as_object_mut().unwrap().insert("generationConfig".to_string(), gen_config);
         }
     }
 
