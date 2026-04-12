@@ -38,7 +38,7 @@ jobs:
         with:
           tagName: app-v__VERSION__
           releaseName: "VocaCode v__VERSION__"
-          releaseBody: "Automated release of VocaCode Desktop Application."
+          releaseBody: "Fix: Claude model error 400 pada mode Terperinci (Thinking). Menambahkan maxOutputTokens wajib untuk Anthropic Vertex API."
           releaseDraft: true
           prerelease: false
           args: ${{ matrix.args }}

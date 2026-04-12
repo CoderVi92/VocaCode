@@ -774,25 +774,31 @@ async fn execute_model_prompt(
                 format!("Budget di-clamp ke minimum: {}", min_budget));
         }
 
-        // WORKAROUND: Antigravity API saat ini gagal mem-parsing `contents` menjadi `messages`
-        // jika `generationConfig` (khususnya `thinkingConfig`) dikirim untuk model Anthropic (Claude).
-        // Ini murni bug pipeline translasi di sisi Antigravity/Vertex. 
-        // Berdasarkan screenshot server.cjs, Claude berjalan lancar jika `thinkingConfig` ini
-        // tidak divalidasi ketat (atau kita bypass). Jadi kita kecualikan Claude sementara.
-        if api_provider != "API_PROVIDER_ANTHROPIC_VERTEX" {
-            request_obj.as_object_mut().unwrap().insert(
-                "generationConfig".to_string(),
-                serde_json::json!({
-                    "thinkingConfig": {
-                        "includeThoughts": true,
-                        "thinkingBudget": t_budget
-                    }
-                })
+        // Bangun generationConfig untuk SEMUA provider termasuk Claude
+        // (server.cjs baris 489-496: thinkingConfig selalu dikirim jika supportsThinking)
+        let mut gen_config = serde_json::json!({
+            "thinkingConfig": {
+                "includeThoughts": true,
+                "thinkingBudget": t_budget
+            }
+        });
+
+        // Anthropic Vertex WAJIB menyertakan maxOutputTokens secara eksplisit
+        // Tanpa field ini, API mengembalikan 400 Bad Request saat thinking diaktifkan
+        // (Sesuai analisa server.cjs dan fix percakapan sebelumnya)
+        if api_provider == "API_PROVIDER_ANTHROPIC_VERTEX" {
+            gen_config.as_object_mut().unwrap().insert(
+                "maxOutputTokens".to_string(),
+                serde_json::json!(64000)  // Claude output limit dari MODELS config
             );
-        } else {
-            let _ = write_debug_log("Kelompok 2 - Antigravity API".into(), "ClaudeBypass".into(),
-                "thinkingConfig tidak dikirim ke Claude untuk menghindari bug rujukan Anthropic".into());
+            let _ = write_debug_log("Kelompok 2 - Antigravity API".into(), "ClaudeConfig".into(),
+                format!("thinkingConfig + maxOutputTokens(64000) dikirim untuk Claude | budget: {}", t_budget));
         }
+
+        request_obj.as_object_mut().unwrap().insert(
+            "generationConfig".to_string(),
+            gen_config
+        );
     }
 
     let payload = serde_json::json!({
