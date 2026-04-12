@@ -774,16 +774,25 @@ async fn execute_model_prompt(
                 format!("Budget di-clamp ke minimum: {}", min_budget));
         }
 
-        // KEMBALIKAN KE LOGIKA MURNI server.cjs: Kirim thinkingBudget apa adanya (bahkan jika -1)
-        request_obj.as_object_mut().unwrap().insert(
-            "generationConfig".to_string(),
-            serde_json::json!({
-                "thinkingConfig": {
-                    "includeThoughts": true,
-                    "thinkingBudget": t_budget
-                }
-            })
-        );
+        // WORKAROUND: Antigravity API saat ini gagal mem-parsing `contents` menjadi `messages`
+        // jika `generationConfig` (khususnya `thinkingConfig`) dikirim untuk model Anthropic (Claude).
+        // Ini murni bug pipeline translasi di sisi Antigravity/Vertex. 
+        // Berdasarkan screenshot server.cjs, Claude berjalan lancar jika `thinkingConfig` ini
+        // tidak divalidasi ketat (atau kita bypass). Jadi kita kecualikan Claude sementara.
+        if api_provider != "API_PROVIDER_ANTHROPIC_VERTEX" {
+            request_obj.as_object_mut().unwrap().insert(
+                "generationConfig".to_string(),
+                serde_json::json!({
+                    "thinkingConfig": {
+                        "includeThoughts": true,
+                        "thinkingBudget": t_budget
+                    }
+                })
+            );
+        } else {
+            let _ = write_debug_log("Kelompok 2 - Antigravity API".into(), "ClaudeBypass".into(),
+                "thinkingConfig tidak dikirim ke Claude untuk menghindari bug rujukan Anthropic".into());
+        }
     }
 
     let payload = serde_json::json!({
