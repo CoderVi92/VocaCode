@@ -767,55 +767,23 @@ async fn execute_model_prompt(
         let mut t_budget = thinking_budget.unwrap_or(-1) as i64;
         let min_budget = min_thinking_budget.unwrap_or(128) as i64;
 
-        // PENTING: budget -1 hanya valid sebagai "dynamic" untuk Gemini Flash
-        // (api_provider == API_PROVIDER_GOOGLE_GEMINI).
-        // Untuk Claude/GPT-OSS, -1 berarti "tidak dipilih" → fallback ke min_budget
-        // agar field thinkingBudget selalu terkirim (required oleh Anthropic API).
-        if t_budget == -1 && api_provider != "API_PROVIDER_GOOGLE_GEMINI" {
-            t_budget = min_budget;
-            let _ = write_debug_log("Kelompok 2 - Antigravity API".into(), "BudgetFallback".into(),
-                format!("Budget -1 di-fallback ke min untuk non-Gemini: {}", min_budget));
-        }
-
-        // Safety clamp: jangan kirim budget di bawah min model (server.cjs baris 472-476)
+        // Safety clamp: jangan pernah kirim budget di bawah minimum model (server.cjs baris 472-476)
         if t_budget != -1 && t_budget < min_budget {
             t_budget = min_budget;
             let _ = write_debug_log("Kelompok 2 - Antigravity API".into(), "BudgetClamp".into(),
                 format!("Budget di-clamp ke minimum: {}", min_budget));
         }
 
-        // PENTING: Antigravity Anthropic Wrapper membutuhkan maxOutputTokens ketika thinking diaktifkan.
-        // Jika tidak, API Anthropic merespons dengan "max_tokens: Field required" (atau "message: Field required").
-        // Kita menggunakan batas default yang aman (mis. 64000).
-        let max_output_tokens = if api_provider == "API_PROVIDER_ANTHROPIC_VERTEX" {
-            Some(64_000)
-        } else {
-            None
-        };
-
-        if t_budget == -1 {
-            // budget -1 = dynamic (Gemini Flash): kirim tanpa thinkingBudget field  
-            let mut gen_config = serde_json::json!({
-                "thinkingConfig": {
-                    "includeThoughts": true
-                }
-            });
-            if let Some(tokens) = max_output_tokens {
-                gen_config.as_object_mut().unwrap().insert("maxOutputTokens".to_string(), serde_json::json!(tokens));
-            }
-            request_obj.as_object_mut().unwrap().insert("generationConfig".to_string(), gen_config);
-        } else {
-            let mut gen_config = serde_json::json!({
+        // KEMBALIKAN KE LOGIKA MURNI server.cjs: Kirim thinkingBudget apa adanya (bahkan jika -1)
+        request_obj.as_object_mut().unwrap().insert(
+            "generationConfig".to_string(),
+            serde_json::json!({
                 "thinkingConfig": {
                     "includeThoughts": true,
                     "thinkingBudget": t_budget
                 }
-            });
-            if let Some(tokens) = max_output_tokens {
-                gen_config.as_object_mut().unwrap().insert("maxOutputTokens".to_string(), serde_json::json!(tokens));
-            }
-            request_obj.as_object_mut().unwrap().insert("generationConfig".to_string(), gen_config);
-        }
+            })
+        );
     }
 
     let payload = serde_json::json!({
